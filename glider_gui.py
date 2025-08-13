@@ -186,7 +186,17 @@ class GliderGUI(QMainWindow):
         self.physics_label.setStyleSheet("background-color: #f0f0f0; padding: 5px; border: 1px solid #ccc;")
         self.physics_label.setWordWrap(True)
         physics_layout.addWidget(self.physics_label)
+        
+        # Control system summary display
+        control_layout = QHBoxLayout()
+        control_layout.addWidget(QLabel("Control Summary:"))
+        self.control_label = QLabel("No control data")
+        self.control_label.setStyleSheet("background-color: #e8f4f8; padding: 5px; border: 1px solid #87ceeb;")
+        self.control_label.setWordWrap(True)
+        control_layout.addWidget(self.control_label)
+        
         sim_layout.addLayout(physics_layout)
+        sim_layout.addLayout(control_layout)
         self.sim_fig = Figure(figsize=(8, 6))
         self.sim_canvas = FigureCanvas(self.sim_fig)
         sim_layout.addWidget(self.sim_canvas)
@@ -201,6 +211,7 @@ class GliderGUI(QMainWindow):
             "Velocity Analysis", 
             "Control & Forces", 
             "Energy Analysis",
+            "Control Analysis",
             "All Diagnostics"
         ])
         self.plot_combo.currentTextChanged.connect(self.update_plot_type)
@@ -526,6 +537,15 @@ class GliderGUI(QMainWindow):
         desired_depth = params.get('desired_depth', 20)
         desired_pitch = params.get('desired_pitch', 0)
         
+        # Store control parameters for analysis
+        self.control_params = {
+            'desired_depth': desired_depth,
+            'desired_pitch': desired_pitch,
+            'control_system': control_choice,
+            'init_depth': init_depth,
+            'init_pitch': init_pitch
+        }
+        
         # Select control system
         from glider_controls import depth_pitch_control, trajectory_following_control
         if control_choice == "Depth/Pitch Control":
@@ -602,9 +622,14 @@ class GliderGUI(QMainWindow):
             speed = np.sqrt(vx**2 + vy**2 + vz**2)
             
             # Calculate accelerations
-            ax = np.gradient(vx, solution.t[-2:])[-1] if len(solution.t) > 1 else 0
-            ay = np.gradient(vy, solution.t[-2:])[-1] if len(solution.t) > 1 else 0
-            az = np.gradient(vz, solution.t[-2:])[-1] if len(solution.t) > 1 else 0
+            if len(solution.t) > 2:
+                # Use finite difference for acceleration
+                dt = solution.t[1] - solution.t[0]
+                ax = (vx - np.gradient(solution.y[0, :], solution.t)[-2]) / dt if len(solution.t) > 2 else 0
+                ay = (vy - np.gradient(solution.y[1, :], solution.t)[-2]) / dt if len(solution.t) > 2 else 0
+                az = (vz - np.gradient(solution.y[2, :], solution.t)[-2]) / dt if len(solution.t) > 2 else 0
+            else:
+                ax = ay = az = 0
             
             # Get current orientation
             current_quat = solution.y[3:7, -1]
@@ -642,6 +667,63 @@ class GliderGUI(QMainWindow):
         except Exception as e:
             self.physics_label.setText(f"Diagnostics Error: {str(e)}")
             print(f"Physics diagnostics error details: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def update_control_summary(self, solution):
+        """Update control system summary display"""
+        try:
+            if not hasattr(self, 'control_params') or solution is None:
+                self.control_label.setText("No control data available")
+                return
+            
+            # Extract control performance metrics
+            desired_depth = self.control_params['desired_depth']
+            actual_depth = solution.y[2, :]
+            depth_error = actual_depth - desired_depth
+            
+            # Calculate performance metrics
+            max_error = np.max(np.abs(depth_error))
+            final_error = np.abs(depth_error[-1])
+            settling_time = None
+            
+            # Find settling time (when error stays within 5% of target)
+            tolerance = 0.05 * abs(desired_depth)
+            for i, error in enumerate(depth_error):
+                if abs(error) <= tolerance:
+                    # Check if it stays within tolerance
+                    if all(abs(depth_error[j]) <= tolerance for j in range(i, len(depth_error))):
+                        settling_time = solution.t[i]
+                        break
+            
+            # Ballast and piston analysis
+            ballast_mass = solution.y[13, :]
+            piston_position = solution.y[14, :]
+            piston_velocity = solution.y[15, :]
+            
+            ballast_change = ballast_mass[-1] - ballast_mass[0]
+            piston_travel_used = piston_position[-1] - piston_position[0]
+            max_piston_velocity = np.max(np.abs(piston_velocity))
+            
+            # Format control summary
+            control_summary = (
+                f"Control System: {self.control_params['control_system']}\n"
+                f"Target Depth: {desired_depth:.1f}m | Final Depth: {actual_depth[-1]:.1f}m\n"
+                f"Max Error: {max_error:.2f}m | Final Error: {final_error:.2f}m\n"
+                f"Settling Time: {settling_time:.1f}s" if settling_time else "Settling Time: Not reached"
+            )
+            
+            actuator_summary = (
+                f"\nActuator Performance:\n"
+                f"Ballast Change: {ballast_change:.3f}kg | Piston Travel: {piston_travel_used:.3f}m\n"
+                f"Max Piston Velocity: {max_piston_velocity:.3f}m/s"
+            )
+            
+            self.control_label.setText(control_summary + actuator_summary)
+            
+        except Exception as e:
+            self.control_label.setText(f"Control Summary Error: {str(e)}")
+            print(f"Control summary error details: {e}")
             import traceback
             traceback.print_exc()
     
@@ -748,6 +830,7 @@ class GliderGUI(QMainWindow):
         self.btn_export.setEnabled(True)
         self.update_plots(solution)
         self.update_physics_diagnostics(solution)
+        self.update_control_summary(solution)
         
     def simulation_error(self, error_msg):
         """Handle simulation errors"""
@@ -768,7 +851,7 @@ class GliderGUI(QMainWindow):
                 print(f"Error updating plot type: {e}")
                 import traceback
                 traceback.print_exc()
-    
+        
     def update_plots(self, solution):
         """Update plots based on selected plot type"""
         try:
@@ -790,6 +873,8 @@ class GliderGUI(QMainWindow):
                 self.plot_control_forces(solution)
             elif plot_type == "Energy Analysis":
                 self.plot_energy_analysis(solution)
+            elif plot_type == "Control Analysis":
+                self.plot_control_analysis(solution)
             elif plot_type == "All Diagnostics":
                 self.plot_all_diagnostics(solution)
             else:
@@ -1056,6 +1141,121 @@ class GliderGUI(QMainWindow):
         ax4.set_xlabel('Time (s)')
         ax4.grid(True)
         ax4.set_title('Control Efficiency')
+        
+        self.sim_fig.tight_layout()
+        self.sim_canvas.draw()
+    
+    def plot_control_analysis(self, solution):
+        """Control inputs and ballast fill analysis"""
+        self.sim_fig.clear()
+        
+        # Extract state variables
+        time = solution.t
+        ballast_mass = solution.y[13, :]  # Ballast mass over time
+        piston_position = solution.y[14, :]  # Piston position over time
+        piston_velocity = solution.y[15, :]  # Piston velocity over time
+        
+        # Calculate ballast fill percentage
+        try:
+            ballast_radius = float(self.param_fields['ballast_radius'].text())
+            ballast_length = float(self.param_fields['ballast_length'].text())
+            rho_water = float(self.param_fields['rho_water'].text())
+            
+            # Maximum ballast volume and mass
+            max_ballast_volume = np.pi * ballast_radius**2 * ballast_length
+            max_ballast_mass = rho_water * max_ballast_volume
+            
+            # Fill percentage over time
+            fill_percentage = (ballast_mass / max_ballast_mass) * 100
+        except:
+            # Fallback if parameters not available
+            fill_percentage = np.zeros_like(time)
+        
+        # Plot 1: Ballast Fill Percentage vs Time
+        ax1 = self.sim_fig.add_subplot(221)
+        ax1.plot(time, fill_percentage, 'b-', linewidth=2, label='Actual Fill %')
+        ax1.axhline(y=50, color='r', linestyle='--', alpha=0.7, label='50% (Neutral)')
+        ax1.set_ylabel('Ballast Fill (%)')
+        ax1.set_xlabel('Time (s)')
+        ax1.grid(True)
+        ax1.legend()
+        ax1.set_title('Ballast Fill Percentage vs Time')
+        
+        # Plot 2: Moving Mass (Piston) Position vs Time
+        ax2 = self.sim_fig.add_subplot(222)
+        ax2.plot(time, piston_position, 'g-', linewidth=2, label='Piston Position')
+        
+        # Show piston travel limits if available
+        try:
+            piston_travel = float(self.param_fields['piston_travel'].text())
+            if hasattr(self, 'piston_set_pos') and self.piston_set_pos is not None:
+                min_pos = self.piston_set_pos
+                max_pos = self.piston_set_pos + piston_travel
+                ax2.axhline(y=min_pos, color='r', linestyle='--', alpha=0.7, label='Min Position')
+                ax2.axhline(y=max_pos, color='r', linestyle='--', alpha=0.7, label='Max Position')
+        except:
+            pass
+            
+        ax2.set_ylabel('Piston Position (m)')
+        ax2.set_xlabel('Time (s)')
+        ax2.grid(True)
+        ax2.legend()
+        ax2.set_title('Moving Mass Position vs Time')
+        
+        # Plot 3: Piston Velocity vs Time
+        ax3 = self.sim_fig.add_subplot(223)
+        ax3.plot(time, piston_velocity, 'm-', linewidth=2, label='Piston Velocity')
+        ax3.axhline(y=0, color='k', linestyle='-', alpha=0.3)
+        ax3.set_ylabel('Piston Velocity (m/s)')
+        ax3.set_xlabel('Time (s)')
+        ax3.grid(True)
+        ax3.legend()
+        ax3.set_title('Moving Mass Velocity vs Time')
+        
+        # Plot 4: Control System Response Analysis
+        ax4 = self.sim_fig.add_subplot(224)
+        
+        # Show control targets and performance
+        if hasattr(self, 'control_params'):
+            try:
+                desired_depth = self.control_params['desired_depth']
+                actual_depth = solution.y[2, :]  # Z position (depth)
+                depth_error = actual_depth - desired_depth
+                
+                # Plot depth error
+                ax4.plot(time, depth_error, 'c-', linewidth=2, label='Depth Error')
+                ax4.axhline(y=0, color='k', linestyle='-', alpha=0.3, label='Target (0)')
+                
+                # Show control system info
+                control_system = self.control_params['control_system']
+                ax4.set_title(f'{control_system}\nTarget Depth: {desired_depth}m')
+                ax4.set_ylabel('Depth Error (m)')
+                ax4.set_xlabel('Time (s)')
+                ax4.grid(True)
+                
+                # Add control performance metrics
+                max_error = np.max(np.abs(depth_error))
+                final_error = np.abs(depth_error[-1])
+                ax4.text(0.02, 0.98, f'Max Error: {max_error:.2f}m\nFinal Error: {final_error:.2f}m', 
+                        transform=ax4.transAxes, verticalalignment='top',
+                        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+                
+            except Exception as e:
+                # Fallback plot
+                ax4.plot(time, ballast_mass, 'c-', linewidth=2, label='Ballast Mass')
+                ax4.set_ylabel('Ballast Mass (kg)')
+                ax4.set_xlabel('Time (s)')
+                ax4.grid(True)
+                ax4.set_title('Ballast Mass vs Time')
+        else:
+            # Fallback plot
+            ax4.plot(time, ballast_mass, 'c-', linewidth=2, label='Ballast Mass')
+            ax4.set_ylabel('Ballast Mass (kg)')
+            ax4.set_xlabel('Time (s)')
+            ax4.grid(True)
+            ax4.set_title('Ballast Mass vs Time')
+        
+        ax4.legend()
         
         self.sim_fig.tight_layout()
         self.sim_canvas.draw()
