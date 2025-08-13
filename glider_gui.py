@@ -1,9 +1,11 @@
 import sys
+import time
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
-                            QTabWidget, QGroupBox, QSlider, QComboBox, QSpinBox, QDoubleSpinBox)
-from PyQt5.QtCore import Qt
+                            QTabWidget, QGroupBox, QSlider, QComboBox, QSpinBox, QDoubleSpinBox,
+                            QProgressBar, QMessageBox)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from glider_simulation import run_simulation
@@ -12,6 +14,39 @@ import os
 import matplotlib.patches as patches
 from scipy.spatial.transform import Rotation as R
 from unit_converter import UnitConverterWidget
+
+class SimulationWorker(QThread):
+    """Worker thread for running simulations without freezing the GUI"""
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(object)
+    error = pyqtSignal(str)
+    
+    def __init__(self, params, control_func, t_end, dt, init_depth, init_pitch, solver):
+        super().__init__()
+        self.params = params
+        self.control_func = control_func
+        self.t_end = t_end
+        self.dt = dt
+        self.init_depth = init_depth
+        self.init_pitch = init_pitch
+        self.solver = solver
+        
+    def run(self):
+        try:
+            # Run simulation with progress updates
+            solution = run_simulation(
+                self.params,
+                control_func=self.control_func,
+                t_end=self.t_end,
+                dt=self.dt,
+                init_depth=self.init_depth,
+                init_pitch=self.init_pitch,
+                solver=self.solver,
+                progress_callback=self.progress.emit
+            )
+            self.finished.emit(solution)
+        except Exception as e:
+            self.error.emit(str(e))
 
 class GliderGUI(QMainWindow):
     PARAMS_FILE = "glider_gui_params.json"
@@ -128,12 +163,27 @@ class GliderGUI(QMainWindow):
         self.control_combo.addItems(["Depth/Pitch Control", "Trajectory Following Control"])
         sim_ctrl_layout.addWidget(self.control_combo)
         sim_layout.addLayout(sim_ctrl_layout)
+        
+        # Progress bar and status
+        progress_layout = QHBoxLayout()
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.status_label = QLabel("Ready to run simulation")
+        self.time_label = QLabel("")
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.clicked.connect(self.cancel_simulation)
+        progress_layout.addWidget(self.status_label)
+        progress_layout.addWidget(self.progress_bar)
+        progress_layout.addWidget(self.time_label)
+        progress_layout.addWidget(self.cancel_btn)
+        sim_layout.addLayout(progress_layout)
         self.sim_fig = Figure(figsize=(8, 6))
         self.sim_canvas = FigureCanvas(self.sim_fig)
         sim_layout.addWidget(self.sim_canvas)
-        btn_run = QPushButton("Run Simulation")
-        btn_run.clicked.connect(self.run_simulation)
-        sim_layout.addWidget(btn_run)
+        self.btn_run = QPushButton("Run Simulation")
+        self.btn_run.clicked.connect(self.run_simulation)
+        sim_layout.addWidget(self.btn_run)
         self.tabs.addTab(sim_tab, "Simulation")
         # --- Converter Tab ---
         converter_tab = UnitConverterWidget()
@@ -143,6 +193,16 @@ class GliderGUI(QMainWindow):
         self.update_feedback()
         self.update_cross_section()
         self.update_cross_preview()
+        
+        # Initialize simulation worker
+        self.simulation_worker = None
+        
+    def closeEvent(self, event):
+        """Clean up threads when closing the application"""
+        if self.simulation_worker and self.simulation_worker.isRunning():
+            self.simulation_worker.terminate()
+            self.simulation_worker.wait()
+        event.accept()
         
     def _setup_parameter_tabs(self):
         """Create parameter input tabs"""
@@ -408,10 +468,17 @@ class GliderGUI(QMainWindow):
             self.cross_canvas.draw()
     
     def run_simulation(self):
+        # Prevent multiple simulations from running simultaneously
+        if self.simulation_worker and self.simulation_worker.isRunning():
+            QMessageBox.information(self, "Simulation Running", "Please wait for the current simulation to complete.")
+            return
+            
         params = self.get_parameters()
         if params is None:
             return
+            
         params['wing_area'] = params['wing_span'] * params['wing_chord']
+        
         # Get simulation settings from GUI
         dt = self.dt_spin.value()
         t_end = self.tend_spin.value()
@@ -419,9 +486,11 @@ class GliderGUI(QMainWindow):
         init_depth = self.init_depth_spin.value()
         init_pitch = self.init_pitch_spin.value()
         control_choice = self.control_combo.currentText()
+        
         # Use user-settable desired depth/pitch if present
         desired_depth = params.get('desired_depth', 20)
         desired_pitch = params.get('desired_pitch', 0)
+        
         # Select control system
         from glider_controls import depth_pitch_control, trajectory_following_control
         if control_choice == "Depth/Pitch Control":
@@ -431,17 +500,80 @@ class GliderGUI(QMainWindow):
             control_func = lambda t, s: trajectory_following_control(t, s, waypoints)
         else:
             control_func = lambda t, s: depth_pitch_control(t, s, desired_depth, desired_pitch)
-        # Run simulation
-        solution = run_simulation(
-            params,
-            control_func=control_func,
-            t_end=t_end,
-            dt=dt,
-            init_depth=init_depth,
-            init_pitch=init_pitch,
-            solver=solver
+        
+        # Setup progress bar and controls
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.status_label.setText("Initializing simulation...")
+        self.cancel_btn.setVisible(True)
+        self.time_label.setText("")
+        
+        # Record start time for timing estimates
+        self.sim_start_time = time.time()
+        
+        # Create and start worker thread
+        self.simulation_worker = SimulationWorker(
+            params, control_func, t_end, dt, init_depth, init_pitch, solver
         )
+        self.simulation_worker.progress.connect(self.update_progress)
+        self.simulation_worker.finished.connect(self.simulation_completed)
+        self.simulation_worker.error.connect(self.simulation_error)
+        self.simulation_worker.start()
+        
+        # Disable run button during simulation
+        self.btn_run.setEnabled(False)
+        
+    def update_progress(self, value):
+        """Update progress bar during simulation"""
+        self.progress_bar.setValue(value)
+        if value < 100:
+            # Calculate time estimates
+            elapsed_time = time.time() - self.sim_start_time
+            if value > 10:  # Only show estimates after initialization
+                estimated_total = elapsed_time * 100 / value
+                remaining_time = estimated_total - elapsed_time
+                if remaining_time > 0:
+                    self.time_label.setText(f"Est: {remaining_time:.1f}s remaining")
+                    self.status_label.setText(f"Running simulation... {value}%")
+                else:
+                    self.time_label.setText("")
+                    self.status_label.setText(f"Running simulation... {value}%")
+            else:
+                self.status_label.setText(f"Initializing... {value}%")
+        else:
+            self.status_label.setText("Simulation completed!")
+            self.time_label.setText("")
+            
+    def cancel_simulation(self):
+        """Cancel the running simulation"""
+        if self.simulation_worker and self.simulation_worker.isRunning():
+            self.simulation_worker.terminate()
+            self.simulation_worker.wait()
+            self.simulation_worker = None
+            self.progress_bar.setVisible(False)
+            self.cancel_btn.setVisible(False)
+            self.time_label.setText("")
+            self.status_label.setText("Simulation cancelled")
+            self.btn_run.setEnabled(True)
+        
+    def simulation_completed(self, solution):
+        """Handle simulation completion"""
+        self.progress_bar.setVisible(False)
+        self.cancel_btn.setVisible(False)
+        self.time_label.setText("")
+        self.status_label.setText("Simulation completed! Updating plots...")
+        self.btn_run.setEnabled(True)
         self.update_plots(solution)
+        
+    def simulation_error(self, error_msg):
+        """Handle simulation errors"""
+        self.progress_bar.setVisible(False)
+        self.cancel_btn.setVisible(False)
+        self.time_label.setText("")
+        self.status_label.setText(f"Simulation failed: {error_msg}")
+        self.btn_run.setEnabled(True)
+        QMessageBox.critical(self, "Simulation Error", f"An error occurred during simulation:\n{error_msg}")
         
     def update_plots(self, solution):
         self.sim_fig.clear()

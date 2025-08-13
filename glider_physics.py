@@ -564,7 +564,7 @@ class UnderwaterGlider:
             piston_vel = 0.0
 
         # compute pump power/work
-        self._compute_pump_power_work(pos, m_ballast, dm_dt, t)
+    # self._compute_pump_power_work(pos, m_ballast, dm_dt, t)  # Disabled: not implemented
 
         # Form derivative vector — state has length 17 now
         deriv = np.zeros_like(state, dtype=float)
