@@ -178,12 +178,47 @@ class GliderGUI(QMainWindow):
         progress_layout.addWidget(self.time_label)
         progress_layout.addWidget(self.cancel_btn)
         sim_layout.addLayout(progress_layout)
+        
+        # Physics diagnostics display
+        physics_layout = QHBoxLayout()
+        physics_layout.addWidget(QLabel("Physics Diagnostics:"))
+        self.physics_label = QLabel("No simulation data")
+        self.physics_label.setStyleSheet("background-color: #f0f0f0; padding: 5px; border: 1px solid #ccc;")
+        self.physics_label.setWordWrap(True)
+        physics_layout.addWidget(self.physics_label)
+        sim_layout.addLayout(physics_layout)
         self.sim_fig = Figure(figsize=(8, 6))
         self.sim_canvas = FigureCanvas(self.sim_fig)
         sim_layout.addWidget(self.sim_canvas)
+        
+        # Add plot type selector for different diagnostic views
+        plot_layout = QHBoxLayout()
+        plot_layout.addWidget(QLabel("Plot Type:"))
+        self.plot_combo = QComboBox()
+        self.plot_combo.addItems([
+            "Basic (Depth & Pitch)", 
+            "3D Trajectory", 
+            "Velocity Analysis", 
+            "Control & Forces", 
+            "Energy Analysis",
+            "All Diagnostics"
+        ])
+        self.plot_combo.currentTextChanged.connect(self.update_plot_type)
+        plot_layout.addWidget(self.plot_combo)
+        sim_layout.addLayout(plot_layout)
+        
+        # Simulation control buttons
+        button_layout = QHBoxLayout()
         self.btn_run = QPushButton("Run Simulation")
         self.btn_run.clicked.connect(self.run_simulation)
-        sim_layout.addWidget(self.btn_run)
+        button_layout.addWidget(self.btn_run)
+        
+        self.btn_export = QPushButton("Export Data")
+        self.btn_export.clicked.connect(self.export_simulation_data)
+        self.btn_export.setEnabled(False)
+        button_layout.addWidget(self.btn_export)
+        
+        sim_layout.addLayout(button_layout)
         self.tabs.addTab(sim_tab, "Simulation")
         # --- Converter Tab ---
         converter_tab = UnitConverterWidget()
@@ -521,8 +556,9 @@ class GliderGUI(QMainWindow):
         self.simulation_worker.error.connect(self.simulation_error)
         self.simulation_worker.start()
         
-        # Disable run button during simulation
+        # Disable buttons during simulation
         self.btn_run.setEnabled(False)
+        self.btn_export.setEnabled(False)
         
     def update_progress(self, value):
         """Update progress bar during simulation"""
@@ -544,6 +580,150 @@ class GliderGUI(QMainWindow):
         else:
             self.status_label.setText("Simulation completed!")
             self.time_label.setText("")
+    
+    def update_physics_diagnostics(self, solution):
+        """Update physics diagnostics display with key parameters"""
+        try:
+            # Check if solution is valid
+            if solution is None or not hasattr(solution, 't') or not hasattr(solution, 'y'):
+                self.physics_label.setText("No valid simulation data available")
+                return
+                
+            # Extract key physics parameters
+            current_time = solution.t[-1]
+            current_depth = solution.y[2, -1]
+            current_x = solution.y[0, -1]
+            current_y = solution.y[1, -1]
+            
+            # Calculate velocities
+            vx = np.gradient(solution.y[0, :], solution.t)[-1]
+            vy = np.gradient(solution.y[1, :], solution.t)[-1]
+            vz = np.gradient(solution.y[2, :], solution.t)[-1]
+            speed = np.sqrt(vx**2 + vy**2 + vz**2)
+            
+            # Calculate accelerations
+            ax = np.gradient(vx, solution.t[-2:])[-1] if len(solution.t) > 1 else 0
+            ay = np.gradient(vy, solution.t[-2:])[-1] if len(solution.t) > 1 else 0
+            az = np.gradient(vz, solution.t[-2:])[-1] if len(solution.t) > 1 else 0
+            
+            # Get current orientation
+            current_quat = solution.y[3:7, -1]
+            current_rot = R.from_quat(current_quat)
+            euler_angles = current_rot.as_euler('zyx', degrees=True)
+            pitch = euler_angles[1]
+            yaw = euler_angles[0]
+            roll = euler_angles[2]
+            
+            # Calculate forces (F = ma)
+            mass = 50.0  # Approximate mass
+            Fx = mass * ax
+            Fy = mass * ay
+            Fz = mass * az
+            
+            # Energy analysis
+            g = 9.81
+            PE = mass * g * current_depth
+            KE = 0.5 * mass * speed**2
+            TE = PE + KE
+            
+            # Format diagnostics string
+            diagnostics = (
+                f"Time: {current_time:.2f}s | "
+                f"Position: ({current_x:.2f}, {current_y:.2f}, {current_depth:.2f})m\n"
+                f"Velocity: ({vx:.3f}, {vy:.3f}, {vz:.3f}) m/s | Speed: {speed:.3f} m/s\n"
+                f"Acceleration: ({ax:.3f}, {ay:.3f}, {az:.3f}) m/s²\n"
+                f"Orientation: Pitch={pitch:.1f}° Yaw={yaw:.1f}° Roll={roll:.1f}°\n"
+                f"Forces: ({Fx:.1f}, {Fy:.1f}, {Fz:.1f}) N\n"
+                f"Energy: PE={PE:.1f}J KE={KE:.1f}J Total={TE:.1f}J"
+            )
+            
+            self.physics_label.setText(diagnostics)
+            
+        except Exception as e:
+            self.physics_label.setText(f"Diagnostics Error: {str(e)}")
+            print(f"Physics diagnostics error details: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def export_simulation_data(self):
+        """Export simulation data to CSV for further analysis"""
+        if not hasattr(self, 'last_solution') or self.last_solution is None:
+            QMessageBox.warning(self, "No Data", "No simulation data to export. Run a simulation first.")
+            return
+        
+        try:
+            from PyQt5.QtWidgets import QFileDialog
+            filename, _ = QFileDialog.getSaveFileName(
+                self, "Export Simulation Data", "", "CSV Files (*.csv)"
+            )
+            
+            if filename:
+                solution = self.last_solution
+                
+                # Calculate derived quantities
+                vx = np.gradient(solution.y[0, :], solution.t)
+                vy = np.gradient(solution.y[1, :], solution.t)
+                vz = np.gradient(solution.y[2, :], solution.t)
+                speed = np.sqrt(vx**2 + vy**2 + vz**2)
+                
+                ax = np.gradient(vx, solution.t)
+                ay = np.gradient(vy, solution.t)
+                az = np.gradient(vz, solution.t)
+                
+                # Get Euler angles
+                pitch_angles, yaw_angles, roll_angles = [], [], []
+                for i in range(len(solution.t)):
+                    quat = solution.y[3:7, i]
+                    rot = R.from_quat(quat)
+                    euler = rot.as_euler('zyx', degrees=True)
+                    yaw_angles.append(euler[0])
+                    pitch_angles.append(euler[1])
+                    roll_angles.append(euler[2])
+                
+                # Calculate forces and energy
+                mass = 50.0
+                g = 9.81
+                Fx = mass * ax
+                Fy = mass * ay
+                Fz = mass * az
+                PE = mass * g * solution.y[2, :]
+                KE = 0.5 * mass * speed**2
+                TE = PE + KE
+                
+                # Create data dictionary
+                data = {
+                    'Time (s)': solution.t,
+                    'X (m)': solution.y[0, :],
+                    'Y (m)': solution.y[1, :],
+                    'Z (m)': solution.y[2, :],
+                    'Vx (m/s)': vx,
+                    'Vy (m/s)': vy,
+                    'Vz (m/s)': vz,
+                    'Speed (m/s)': speed,
+                    'Ax (m/s²)': ax,
+                    'Ay (m/s²)': ay,
+                    'Az (m/s²)': az,
+                    'Pitch (deg)': pitch_angles,
+                    'Yaw (deg)': yaw_angles,
+                    'Roll (deg)': roll_angles,
+                    'Fx (N)': Fx,
+                    'Fy (N)': Fy,
+                    'Fz (N)': Fz,
+                    'Potential Energy (J)': PE,
+                    'Kinetic Energy (J)': KE,
+                    'Total Energy (J)': TE
+                }
+                
+                # Export to CSV
+                import pandas as pd
+                df = pd.DataFrame(data)
+                df.to_csv(filename, index=False)
+                
+                QMessageBox.information(self, "Export Successful", 
+                                      f"Simulation data exported to:\n{filename}")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to export data:\n{str(e)}")
             
     def cancel_simulation(self):
         """Cancel the running simulation"""
@@ -556,6 +736,7 @@ class GliderGUI(QMainWindow):
             self.time_label.setText("")
             self.status_label.setText("Simulation cancelled")
             self.btn_run.setEnabled(True)
+            self.btn_export.setEnabled(False)
         
     def simulation_completed(self, solution):
         """Handle simulation completion"""
@@ -564,7 +745,9 @@ class GliderGUI(QMainWindow):
         self.time_label.setText("")
         self.status_label.setText("Simulation completed! Updating plots...")
         self.btn_run.setEnabled(True)
+        self.btn_export.setEnabled(True)
         self.update_plots(solution)
+        self.update_physics_diagnostics(solution)
         
     def simulation_error(self, error_msg):
         """Handle simulation errors"""
@@ -573,9 +756,51 @@ class GliderGUI(QMainWindow):
         self.time_label.setText("")
         self.status_label.setText(f"Simulation failed: {error_msg}")
         self.btn_run.setEnabled(True)
+        self.btn_export.setEnabled(False)
         QMessageBox.critical(self, "Simulation Error", f"An error occurred during simulation:\n{error_msg}")
         
+    def update_plot_type(self):
+        """Update plots when plot type selection changes"""
+        if hasattr(self, 'last_solution') and self.last_solution is not None:
+            try:
+                self.update_plots(self.last_solution)
+            except Exception as e:
+                print(f"Error updating plot type: {e}")
+                import traceback
+                traceback.print_exc()
+    
     def update_plots(self, solution):
+        """Update plots based on selected plot type"""
+        try:
+            # Check if solution is valid
+            if solution is None or not hasattr(solution, 't') or not hasattr(solution, 'y'):
+                print("Invalid solution object in update_plots")
+                return
+                
+            self.last_solution = solution  # Store for plot type changes
+            plot_type = self.plot_combo.currentText()
+            
+            if plot_type == "Basic (Depth & Pitch)":
+                self.plot_basic(solution)
+            elif plot_type == "3D Trajectory":
+                self.plot_3d_trajectory(solution)
+            elif plot_type == "Velocity Analysis":
+                self.plot_velocity_analysis(solution)
+            elif plot_type == "Control & Forces":
+                self.plot_control_forces(solution)
+            elif plot_type == "Energy Analysis":
+                self.plot_energy_analysis(solution)
+            elif plot_type == "All Diagnostics":
+                self.plot_all_diagnostics(solution)
+            else:
+                self.plot_basic(solution)
+        except Exception as e:
+            print(f"Error in update_plots: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def plot_basic(self, solution):
+        """Basic depth and pitch plots"""
         self.sim_fig.clear()
         # Depth vs time plot
         ax1 = self.sim_fig.add_subplot(211)
@@ -583,6 +808,8 @@ class GliderGUI(QMainWindow):
         ax1.set_ylabel("Depth (m)")
         ax1.invert_yaxis()
         ax1.grid(True)
+        ax1.set_title("Depth vs Time")
+        
         # Pitch angle plot
         ax2 = self.sim_fig.add_subplot(212)
         pitch_angles = []
@@ -594,6 +821,344 @@ class GliderGUI(QMainWindow):
         ax2.set_ylabel("Pitch (deg)")
         ax2.set_xlabel("Time (s)")
         ax2.grid(True)
+        ax2.set_title("Pitch Angle vs Time")
+        
+        self.sim_fig.tight_layout()
+        self.sim_canvas.draw()
+    
+    def plot_3d_trajectory(self, solution):
+        """3D trajectory plot"""
+        self.sim_fig.clear()
+        ax = self.sim_fig.add_subplot(111, projection='3d')
+        
+        # Extract position data
+        x = solution.y[0, :]
+        y = solution.y[1, :]
+        z = solution.y[2, :]
+        
+        # Plot 3D trajectory
+        ax.plot(x, y, z, 'b-', linewidth=2, label='Trajectory')
+        ax.scatter(x[0], y[0], z[0], c='g', s=100, label='Start')
+        ax.scatter(x[-1], y[-1], z[-1], c='r', s=100, label='End')
+        
+        # Add arrows for orientation at key points
+        for i in range(0, len(solution.t), max(1, len(solution.t)//10)):
+            quat = solution.y[3:7, i]
+            rot = R.from_quat(quat)
+            # Get forward direction (assuming x is forward)
+            forward = rot.apply([1, 0, 0])
+            ax.quiver(x[i], y[i], z[i], forward[0], forward[1], forward[2], 
+                     length=0.5, color='red', alpha=0.7)
+        
+        ax.set_xlabel('X (m)')
+        ax.set_ylabel('Y (m)')
+        ax.set_zlabel('Depth (m)')
+        ax.set_title('3D Trajectory')
+        ax.legend()
+        ax.invert_zaxis()  # Depth increases downward
+        
+        self.sim_fig.tight_layout()
+        self.sim_canvas.draw()
+    
+    def plot_velocity_analysis(self, solution):
+        """Velocity component analysis"""
+        self.sim_fig.clear()
+        
+        # Calculate velocities from position derivatives
+        dt = np.diff(solution.t)
+        vx = np.gradient(solution.y[0, :], solution.t)
+        vy = np.gradient(solution.y[1, :], solution.t)
+        vz = np.gradient(solution.y[2, :], solution.t)
+        speed = np.sqrt(vx**2 + vy**2 + vz**2)
+        
+        # Velocity components
+        ax1 = self.sim_fig.add_subplot(221)
+        ax1.plot(solution.t, vx, 'r-', label='Vx')
+        ax1.plot(solution.t, vy, 'g-', label='Vy')
+        ax1.plot(solution.t, vz, 'b-', label='Vz')
+        ax1.set_ylabel('Velocity (m/s)')
+        ax1.grid(True)
+        ax1.legend()
+        ax1.set_title('Velocity Components')
+        
+        # Speed magnitude
+        ax2 = self.sim_fig.add_subplot(222)
+        ax2.plot(solution.t, speed, 'k-', linewidth=2)
+        ax2.set_ylabel('Speed (m/s)')
+        ax2.grid(True)
+        ax2.set_title('Speed Magnitude')
+        
+        # Angular velocities (from quaternions)
+        ax3 = self.sim_fig.add_subplot(223)
+        omega_x, omega_y, omega_z = [], [], []
+        for i in range(len(solution.t)):
+            quat = solution.y[3:7, i]
+            # Approximate angular velocity from quaternion differences
+            if i > 0:
+                dq = quat - solution.y[3:7, i-1]
+                dt_ang = solution.t[i] - solution.t[i-1]
+                if dt_ang > 0:
+                    omega = 2 * dq / dt_ang
+                    omega_x.append(omega[0])
+                    omega_y.append(omega[1])
+                    omega_z.append(omega[2])
+                else:
+                    omega_x.append(0)
+                    omega_y.append(0)
+                    omega_z.append(0)
+            else:
+                omega_x.append(0)
+                omega_y.append(0)
+                omega_z.append(0)
+        
+        ax3.plot(solution.t, omega_x, 'r-', label='ωx')
+        ax3.plot(solution.t, omega_y, 'g-', label='ωy')
+        ax3.plot(solution.t, omega_z, 'b-', label='ωz')
+        ax3.set_ylabel('Angular Velocity (rad/s)')
+        ax3.set_xlabel('Time (s)')
+        ax3.grid(True)
+        ax3.legend()
+        ax3.set_title('Angular Velocities')
+        
+        # Velocity phase space
+        ax4 = self.sim_fig.add_subplot(224)
+        ax4.scatter(vx, vz, c=solution.t, cmap='viridis', alpha=0.7)
+        ax4.set_xlabel('Vx (m/s)')
+        ax4.set_ylabel('Vz (m/s)')
+        ax4.grid(True)
+        ax4.set_title('Velocity Phase Space (Vx vs Vz)')
+        
+        self.sim_fig.tight_layout()
+        self.sim_canvas.draw()
+    
+    def plot_control_forces(self, solution):
+        """Control inputs and forces analysis"""
+        self.sim_fig.clear()
+        
+        # Extract control inputs (approximate from state changes)
+        dt = np.diff(solution.t)
+        ax = np.gradient(solution.y[0, :], solution.t)
+        ay = np.gradient(solution.y[1, :], solution.t)
+        az = np.gradient(solution.y[2, :], solution.t)
+        
+        # Control inputs (approximate)
+        ax1 = self.sim_fig.add_subplot(221)
+        ax1.plot(solution.t, ax, 'r-', label='Ax')
+        ax1.plot(solution.t, ay, 'g-', label='Ay')
+        ax1.plot(solution.t, az, 'b-', label='Az')
+        ax1.set_ylabel('Acceleration (m/s²)')
+        ax1.grid(True)
+        ax1.legend()
+        ax1.set_title('Acceleration Components')
+        
+        # Force analysis (F = ma, approximate)
+        mass = 50.0  # Approximate glider mass
+        Fx = mass * ax
+        Fy = mass * ay
+        Fz = mass * az
+        
+        ax2 = self.sim_fig.add_subplot(222)
+        ax2.plot(solution.t, Fx, 'r-', label='Fx')
+        ax2.plot(solution.t, Fy, 'g-', label='Fy')
+        ax2.plot(solution.t, Fz, 'b-', label='Fz')
+        ax2.set_ylabel('Force (N)')
+        ax2.grid(True)
+        ax2.legend()
+        ax2.set_title('Force Components')
+        
+        # Control effort (integral of force)
+        control_effort_x = np.cumsum(np.abs(Fx)) * np.mean(np.diff(solution.t))
+        control_effort_z = np.cumsum(np.abs(Fz)) * np.mean(np.diff(solution.t))
+        
+        ax3 = self.sim_fig.add_subplot(223)
+        ax3.plot(solution.t, control_effort_x, 'r-', label='X Control Effort')
+        ax3.plot(solution.t, control_effort_z, 'b-', label='Z Control Effort')
+        ax3.set_ylabel('Control Effort (N·s)')
+        ax3.set_xlabel('Time (s)')
+        ax3.grid(True)
+        ax3.legend()
+        ax3.set_title('Cumulative Control Effort')
+        
+        # Force phase space
+        ax4 = self.sim_fig.add_subplot(224)
+        ax4.scatter(Fx, Fz, c=solution.t, cmap='plasma', alpha=0.7)
+        ax4.set_xlabel('Fx (N)')
+        ax4.set_ylabel('Fz (N)')
+        ax4.grid(True)
+        ax4.set_title('Force Phase Space (Fx vs Fz)')
+        
+        self.sim_fig.tight_layout()
+        self.sim_canvas.draw()
+    
+    def plot_energy_analysis(self, solution):
+        """Energy analysis plots"""
+        self.sim_fig.clear()
+        
+        # Calculate energies
+        g = 9.81  # gravity
+        mass = 50.0  # approximate mass
+        
+        # Potential energy (PE = mgh, where h is depth)
+        depth = solution.y[2, :]
+        PE = mass * g * depth
+        
+        # Kinetic energy (KE = 0.5 * m * v²)
+        vx = np.gradient(solution.y[0, :], solution.t)
+        vy = np.gradient(solution.y[1, :], solution.t)
+        vz = np.gradient(solution.y[2, :], solution.t)
+        speed = np.sqrt(vx**2 + vy**2 + vz**2)
+        KE = 0.5 * mass * speed**2
+        
+        # Total energy
+        TE = PE + KE
+        
+        # Energy plots
+        ax1 = self.sim_fig.add_subplot(221)
+        ax1.plot(solution.t, PE, 'b-', label='Potential Energy')
+        ax1.plot(solution.t, KE, 'r-', label='Kinetic Energy')
+        ax1.plot(solution.t, TE, 'k-', label='Total Energy')
+        ax1.set_ylabel('Energy (J)')
+        ax1.grid(True)
+        ax1.legend()
+        ax1.set_title('Energy vs Time')
+        
+        # Energy conservation (should be relatively constant)
+        ax2 = self.sim_fig.add_subplot(222)
+        energy_change = np.diff(TE)
+        ax2.plot(solution.t[1:], energy_change, 'g-')
+        ax2.axhline(y=0, color='k', linestyle='--', alpha=0.5)
+        ax2.set_ylabel('Energy Change (J)')
+        ax2.grid(True)
+        ax2.set_title('Energy Conservation (ΔE)')
+        
+        # Power (rate of energy change)
+        ax3 = self.sim_fig.add_subplot(223)
+        dt = np.diff(solution.t)
+        power = energy_change / dt
+        ax3.plot(solution.t[1:], power, 'm-')
+        ax3.set_ylabel('Power (W)')
+        ax3.set_xlabel('Time (s)')
+        ax3.grid(True)
+        ax3.set_title('Power vs Time')
+        
+        # Energy efficiency (work done vs energy input)
+        ax4 = self.sim_fig.add_subplot(224)
+        # Calculate work done by control forces
+        Fx = mass * np.gradient(vx, solution.t)
+        Fz = mass * np.gradient(vz, solution.t)
+        work_x = np.cumsum(Fx * vx) * np.mean(np.diff(solution.t))
+        work_z = np.cumsum(Fz * vz) * np.mean(np.diff(solution.t))
+        total_work = work_x + work_z
+        
+        efficiency = np.abs(total_work) / (TE + 1e-6)  # Avoid division by zero
+        ax4.plot(solution.t, efficiency, 'c-')
+        ax4.set_ylabel('Efficiency')
+        ax4.set_xlabel('Time (s)')
+        ax4.grid(True)
+        ax4.set_title('Control Efficiency')
+        
+        self.sim_fig.tight_layout()
+        self.sim_canvas.draw()
+    
+    def plot_all_diagnostics(self, solution):
+        """Show all diagnostic plots in a comprehensive view"""
+        self.sim_fig.clear()
+        
+        # Create a 3x3 grid of plots
+        # Row 1: Basic plots
+        ax1 = self.sim_fig.add_subplot(3, 3, 1)
+        ax1.plot(solution.t, solution.y[2, :])
+        ax1.set_ylabel("Depth (m)")
+        ax1.invert_yaxis()
+        ax1.grid(True)
+        ax1.set_title("Depth")
+        
+        ax2 = self.sim_fig.add_subplot(3, 3, 2)
+        pitch_angles = []
+        for i in range(len(solution.t)):
+            quat = solution.y[3:7, i]
+            pitch = R.from_quat(quat).as_euler('zyx')[1]
+            pitch_angles.append(np.degrees(pitch))
+        ax2.plot(solution.t, pitch_angles)
+        ax2.set_ylabel("Pitch (deg)")
+        ax2.grid(True)
+        ax2.set_title("Pitch")
+        
+        ax3 = self.sim_fig.add_subplot(3, 3, 3)
+        vx = np.gradient(solution.y[0, :], solution.t)
+        vy = np.gradient(solution.y[1, :], solution.t)
+        vz = np.gradient(solution.y[2, :], solution.t)
+        speed = np.sqrt(vx**2 + vy**2 + vz**2)
+        ax3.plot(solution.t, speed)
+        ax3.set_ylabel("Speed (m/s)")
+        ax3.grid(True)
+        ax3.set_title("Speed")
+        
+        # Row 2: Velocity analysis
+        ax4 = self.sim_fig.add_subplot(3, 3, 4)
+        ax4.plot(solution.t, vx, 'r-', label='Vx')
+        ax4.plot(solution.t, vy, 'g-', label='Vy')
+        ax4.plot(solution.t, vz, 'b-', label='Vz')
+        ax4.set_ylabel('Velocity (m/s)')
+        ax4.grid(True)
+        ax4.legend(fontsize=8)
+        ax4.set_title("Velocity Components")
+        
+        ax5 = self.sim_fig.add_subplot(3, 3, 5)
+        ax5.scatter(vx, vz, c=solution.t, cmap='viridis', alpha=0.7, s=10)
+        ax5.set_xlabel('Vx (m/s)')
+        ax5.set_ylabel('Vz (m/s)')
+        ax5.grid(True)
+        ax5.set_title("Vx vs Vz")
+        
+        ax6 = self.sim_fig.add_subplot(3, 3, 6)
+        # 3D trajectory projection (X vs Z)
+        ax6.plot(solution.y[0, :], solution.y[2, :], 'b-')
+        ax6.set_xlabel('X (m)')
+        ax6.set_ylabel('Depth (m)')
+        ax6.invert_yaxis()
+        ax6.grid(True)
+        ax6.set_title("X-Z Trajectory")
+        
+        # Row 3: Control and energy
+        ax7 = self.sim_fig.add_subplot(3, 3, 7)
+        mass = 50.0
+        ax = np.gradient(vx, solution.t)
+        az = np.gradient(vz, solution.t)
+        Fx = mass * ax
+        Fz = mass * az
+        ax7.plot(solution.t, Fx, 'r-', label='Fx')
+        ax7.plot(solution.t, Fz, 'b-', label='Fz')
+        ax7.set_ylabel('Force (N)')
+        ax7.set_xlabel('Time (s)')
+        ax7.grid(True)
+        ax7.legend(fontsize=8)
+        ax7.set_title("Control Forces")
+        
+        ax8 = self.sim_fig.add_subplot(3, 3, 8)
+        g = 9.81
+        depth = solution.y[2, :]
+        PE = mass * g * depth
+        KE = 0.5 * mass * speed**2
+        TE = PE + KE
+        ax8.plot(solution.t, PE, 'b-', label='PE')
+        ax8.plot(solution.t, KE, 'r-', label='KE')
+        ax8.plot(solution.t, TE, 'k-', label='Total')
+        ax8.set_ylabel('Energy (J)')
+        ax8.set_xlabel('Time (s)')
+        ax8.grid(True)
+        ax8.legend(fontsize=8)
+        ax8.set_title("Energy")
+        
+        ax9 = self.sim_fig.add_subplot(3, 3, 9)
+        # Control effort
+        control_effort = np.cumsum(np.abs(Fx) + np.abs(Fz)) * np.mean(np.diff(solution.t))
+        ax9.plot(solution.t, control_effort, 'g-')
+        ax9.set_ylabel('Control Effort (N·s)')
+        ax9.set_xlabel('Time (s)')
+        ax9.grid(True)
+        ax9.set_title("Control Effort")
+        
         self.sim_fig.tight_layout()
         self.sim_canvas.draw()
 
