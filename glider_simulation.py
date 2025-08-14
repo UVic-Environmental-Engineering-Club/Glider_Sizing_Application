@@ -40,12 +40,33 @@ def run_simulation(params, control_func=None, t_end=1, dt=1,
     if progress_callback:
         progress_callback(10)  # Initialization complete
     
-    # Custom progress tracking wrapper
+    # Custom progress tracking wrapper with control integration
     def dynamics_with_progress(t, y):
+        # Apply control inputs if control function is provided
+        if control_func is not None:
+            try:
+                # Call control function to get control inputs
+                dm_dt, dx_dt = control_func(t, y)
+                
+                # Set control inputs on the glider object
+                glider.dm_ballast_dt = dm_dt
+                glider.dx_p_dt = dx_dt
+                
+                # Debug output (uncomment to see control values)
+                if t % 1.0 < 0.1:  # Print every ~1 second
+                    print(f"t={t:.1f}: Control applied - dm_dt={dm_dt:.4f}, dx_dt={dx_dt:.4f}")
+                
+            except Exception as e:
+                print(f"Control function error at t={t}: {e}")
+                # Fallback to no control
+                glider.dm_ballast_dt = 0.0
+                glider.dx_p_dt = 0.0
+        
         # Calculate progress based on current time
         if progress_callback:
             progress = int(10 + (t / t_end) * 80)  # 10-90% during simulation
             progress_callback(progress)
+        
         return glider.dynamics(t, y)
     
     # Run simulation

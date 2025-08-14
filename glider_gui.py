@@ -1,10 +1,12 @@
 import sys
 import time
+import math
+from math import pi
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                             QTabWidget, QGroupBox, QSlider, QComboBox, QSpinBox, QDoubleSpinBox,
-                            QProgressBar, QMessageBox)
+                            QProgressBar, QMessageBox, QGridLayout, QTableWidget, QTableWidgetItem)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -14,6 +16,13 @@ import os
 import matplotlib.patches as patches
 from scipy.spatial.transform import Rotation as R
 from unit_converter import UnitConverterWidget
+
+# Optional pandas import for data export
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
 
 class SimulationWorker(QThread):
     """Worker thread for running simulations without freezing the GUI"""
@@ -160,7 +169,7 @@ class GliderGUI(QMainWindow):
         # Control system
         sim_ctrl_layout.addWidget(QLabel("Control System:"))
         self.control_combo = QComboBox()
-        self.control_combo.addItems(["Depth/Pitch Control", "Trajectory Following Control"])
+        self.control_combo.addItems(["Depth/Pitch Control", "Trajectory Following Control", "Simple Depth Control"])
         sim_ctrl_layout.addWidget(self.control_combo)
         sim_layout.addLayout(sim_ctrl_layout)
         
@@ -234,6 +243,288 @@ class GliderGUI(QMainWindow):
         # --- Converter Tab ---
         converter_tab = UnitConverterWidget()
         self.tabs.addTab(converter_tab, "Unit Converter")
+
+        # --- Depth Table Tab ---
+        depth_table_tab = QWidget()
+        depth_table_layout = QHBoxLayout(depth_table_tab)  # Changed to horizontal layout
+
+        # Left panel for inputs
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_panel.setMaximumWidth(800)  # Increased width for input panel
+
+        # Input section with side-by-side layout
+        input_section = QGroupBox("Input Parameters")
+        input_grid = QGridLayout()
+
+        # Row 1: Disk positions
+        disk_pos_label = QLabel("Disk Positions (m):")
+        disk_pos_label.setToolTip("Comma-separated list of disk positions along the hull length.\nExample: 0.4, 1.0\nLeave empty to auto-generate based on number of disks.")
+        input_grid.addWidget(disk_pos_label, 0, 0)
+        self.table_disk_positions = QLineEdit()
+        self.table_disk_positions.setPlaceholderText("0.4, 1.0 (comma separated)")
+        self.table_disk_positions.setToolTip("Enter disk positions manually, or leave empty to auto-generate")
+        input_grid.addWidget(self.table_disk_positions, 0, 1)
+
+        n_disks_label = QLabel("Number of Internal Disks:")
+        n_disks_label.setToolTip("Number of internal support disks.\nUsed when disk positions are not specified manually.\nEnd disks at 0 and L are always included.")
+        input_grid.addWidget(n_disks_label, 0, 2)
+        self.table_n_disks = QSpinBox()
+        self.table_n_disks.setRange(0, 20)
+        self.table_n_disks.setValue(2)
+        self.table_n_disks.setToolTip("Used when disk positions are not specified manually")
+        input_grid.addWidget(self.table_n_disks, 0, 3)
+
+        # Row 2: Material properties
+        E_label = QLabel("Young's Modulus (E):")
+        E_label.setToolTip("Material stiffness.\nTypical values:\nAluminum: 69 GPa\nSteel: 200 GPa")
+        input_grid.addWidget(E_label, 1, 0)
+        self.table_E_input = QDoubleSpinBox()
+        self.table_E_input.setDecimals(0)
+        self.table_E_input.setRange(1e9, 1000e9)
+        self.table_E_input.setValue(69e9)
+        self.table_E_input.setSuffix(" Pa")
+        self.table_E_input.setToolTip("Material stiffness (Pa)")
+        input_grid.addWidget(self.table_E_input, 1, 1)
+
+        nu_label = QLabel("Poisson's Ratio (ν):")
+        nu_label.setToolTip("Material property for lateral strain.\nTypical values:\nAluminum: 0.33\nSteel: 0.3")
+        input_grid.addWidget(nu_label, 1, 2)
+        self.table_nu_input = QDoubleSpinBox()
+        self.table_nu_input.setDecimals(3)
+        self.table_nu_input.setRange(0.1, 0.5)
+        self.table_nu_input.setValue(0.33)
+        self.table_nu_input.setToolTip("Ratio of lateral to axial strain")
+        input_grid.addWidget(self.table_nu_input, 1, 3)
+
+        # Row 3: Material properties continued
+        sigma_y_label = QLabel("Yield Strength (σy):")
+        sigma_y_label.setToolTip("Material yield strength.\nTypical values:\nAluminum: 215 MPa\nSteel: 250-500 MPa")
+        input_grid.addWidget(sigma_y_label, 2, 0)
+        self.table_sigma_y_input = QDoubleSpinBox()
+        self.table_sigma_y_input.setDecimals(0)
+        self.table_sigma_y_input.setRange(50e6, 2000e6)
+        self.table_sigma_y_input.setValue(215e6)
+        self.table_sigma_y_input.setSuffix(" Pa")
+        self.table_sigma_y_input.setToolTip("Material yield strength (Pa)")
+        input_grid.addWidget(self.table_sigma_y_input, 2, 1)
+
+        # Row 4: Geometry
+        R_label = QLabel("Hull Radius (R):")
+        R_label.setToolTip("External radius of the hull cylinder")
+        input_grid.addWidget(R_label, 3, 0)
+        self.table_R_input = QDoubleSpinBox()
+        self.table_R_input.setDecimals(3)
+        self.table_R_input.setRange(0.01, 10.0)
+        self.table_R_input.setValue(0.15)
+        self.table_R_input.setSuffix(" m")
+        self.table_R_input.setToolTip("External radius of the hull")
+        input_grid.addWidget(self.table_R_input, 3, 1)
+
+        t_label = QLabel("Hull Thickness (t):")
+        t_label.setToolTip("Thickness of the hull wall")
+        input_grid.addWidget(t_label, 3, 2)
+        self.table_t_input = QDoubleSpinBox()
+        self.table_t_input.setDecimals(4)
+        self.table_t_input.setRange(0.001, 0.1)
+        self.table_t_input.setValue(0.005)
+        self.table_t_input.setSuffix(" m")
+        self.table_t_input.setToolTip("Thickness of the hull wall")
+        input_grid.addWidget(self.table_t_input, 3, 3)
+
+        # Row 5: Environment
+        rho_label = QLabel("Water Density (ρ):")
+        rho_label.setToolTip("Density of water.\nTypical values:\nFresh water: 1000 kg/m³\nSea water: 1025 kg/m³")
+        input_grid.addWidget(rho_label, 4, 0)
+        self.table_rho_input = QDoubleSpinBox()
+        self.table_rho_input.setDecimals(1)
+        self.table_rho_input.setRange(800, 1200)
+        self.table_rho_input.setValue(1025.0)
+        self.table_rho_input.setSuffix(" kg/m³")
+        self.table_rho_input.setToolTip("Water density affects pressure at depth")
+        input_grid.addWidget(self.table_rho_input, 4, 1)
+
+        g_label = QLabel("Gravity (g):")
+        g_label.setToolTip("Gravitational acceleration.\nStandard value: 9.81 m/s²")
+        input_grid.addWidget(g_label, 4, 2)
+        self.table_g_input = QDoubleSpinBox()
+        self.table_g_input.setDecimals(2)
+        self.table_g_input.setRange(9.0, 10.0)
+        self.table_g_input.setValue(9.81)
+        self.table_g_input.setSuffix(" m/s²")
+        self.table_g_input.setToolTip("Gravitational acceleration")
+        input_grid.addWidget(self.table_g_input, 4, 3)
+
+        # Row 6: Desired depth
+        desired_depth_label = QLabel("Desired Depth:")
+        desired_depth_label.setToolTip("Target operating depth for safety factor calculation")
+        input_grid.addWidget(desired_depth_label, 5, 0)
+        self.table_desired_depth = QDoubleSpinBox()
+        self.table_desired_depth.setDecimals(1)
+        self.table_desired_depth.setRange(0.1, 10000.0)
+        self.table_desired_depth.setValue(100.0)
+        self.table_desired_depth.setSuffix(" m")
+        self.table_desired_depth.setToolTip("Target operating depth")
+        input_grid.addWidget(self.table_desired_depth, 5, 1)
+
+        input_section.setLayout(input_grid)
+        left_layout.addWidget(input_section)
+
+        # Safety factors section
+        safety_group = QGroupBox("Safety Factors")
+        safety_grid = QGridLayout()
+
+        # Row 1
+        eta_label = QLabel("End Effect (η_end):")
+        eta_label.setToolTip("End effect multiplier for overall buckling.\nTypical value: 1.15\nHigher values are more conservative.")
+        safety_grid.addWidget(eta_label, 0, 0)
+        self.table_eta_end = QDoubleSpinBox()
+        self.table_eta_end.setDecimals(2)
+        self.table_eta_end.setRange(0.5, 2.0)
+        self.table_eta_end.setValue(1.15)
+        self.table_eta_end.setToolTip("Accounts for end effects in overall buckling")
+        safety_grid.addWidget(self.table_eta_end, 0, 1)
+
+        kdf_overall_label = QLabel("Overall KDF:")
+        kdf_overall_label.setToolTip("Knockdown factor for overall buckling.\nTypical value: 0.65\nAccounts for imperfections and uncertainties.")
+        safety_grid.addWidget(kdf_overall_label, 0, 2)
+        self.table_kdf_overall = QDoubleSpinBox()
+        self.table_kdf_overall.setDecimals(2)
+        self.table_kdf_overall.setRange(0.1, 1.0)
+        self.table_kdf_overall.setValue(0.65)
+        self.table_kdf_overall.setToolTip("Knockdown factor for overall buckling")
+        safety_grid.addWidget(self.table_kdf_overall, 0, 3)
+
+        # Row 2
+        kdf_if_label = QLabel("Interframe KDF:")
+        kdf_if_label.setToolTip("Knockdown factor for interframe buckling.\nTypical value: 0.75\nAccounts for imperfections between frames.")
+        safety_grid.addWidget(kdf_if_label, 1, 0)
+        self.table_kdf_interframe = QDoubleSpinBox()
+        self.table_kdf_interframe.setDecimals(2)
+        self.table_kdf_interframe.setRange(0.1, 1.0)
+        self.table_kdf_interframe.setValue(0.75)
+        self.table_kdf_interframe.setToolTip("Knockdown factor for interframe buckling")
+        safety_grid.addWidget(self.table_kdf_interframe, 1, 1)
+
+        phi_label = QLabel("Yield Factor (φ):")
+        phi_label.setToolTip("Yield strength reduction factor.\nTypical value: 0.80\nAccounts for material variability.")
+        safety_grid.addWidget(phi_label, 1, 2)
+        self.table_phi_yield = QDoubleSpinBox()
+        self.table_phi_yield.setDecimals(2)
+        self.table_phi_yield.setRange(0.1, 1.0)
+        self.table_phi_yield.setValue(0.80)
+        self.table_phi_yield.setToolTip("Reduction factor for yield strength")
+        safety_grid.addWidget(self.table_phi_yield, 1, 3)
+
+        # Row 3
+        gamma_label = QLabel("Load Factor (γ):")
+        gamma_label.setToolTip("Global load factor.\nTypical value: 1.25\nIncreases loads for safety margin.")
+        safety_grid.addWidget(gamma_label, 2, 0)
+        self.table_gamma_global = QDoubleSpinBox()
+        self.table_gamma_global.setDecimals(2)
+        self.table_gamma_global.setRange(0.5, 3.0)
+        self.table_gamma_global.setValue(1.25)
+        self.table_gamma_global.setToolTip("Global factor applied to all loads")
+        safety_grid.addWidget(self.table_gamma_global, 2, 1)
+
+        n_waves_label = QLabel("Waves (n):")
+        n_waves_label.setToolTip("Number of circumferential waves.\nAuto: Find optimal n for each bay\nManual: Use specified value")
+        safety_grid.addWidget(n_waves_label, 2, 2)
+        self.table_n_waves = QComboBox()
+        self.table_n_waves.addItems(["Auto"] + [str(i) for i in range(2, 21)])
+        self.table_n_waves.setCurrentText("Auto")
+        self.table_n_waves.setToolTip("Number of waves in buckling mode shape")
+        safety_grid.addWidget(self.table_n_waves, 2, 3)
+
+        safety_group.setLayout(safety_grid)
+        left_layout.addWidget(safety_group)
+
+        # Coefficients section
+        coeff_group = QGroupBox("Engineering Coefficients")
+        coeff_grid = QGridLayout()
+
+        K_if_label = QLabel("Interframe (K_if):")
+        K_if_label.setToolTip("Interframe buckling coefficient.\nTypical value: 1.25\nAdjusts interframe buckling pressure.")
+        coeff_grid.addWidget(K_if_label, 0, 0)
+        self.table_K_if = QDoubleSpinBox()
+        self.table_K_if.setDecimals(2)
+        self.table_K_if.setRange(0.5, 3.0)
+        self.table_K_if.setValue(1.25)
+        self.table_K_if.setToolTip("Coefficient for interframe buckling calculation")
+        coeff_grid.addWidget(self.table_K_if, 0, 1)
+
+        C_label = QLabel("Overall (C):")
+        C_label.setToolTip("Overall buckling coefficient.\nTypical value: 2.0\nAdjusts overall buckling pressure.")
+        coeff_grid.addWidget(C_label, 0, 2)
+        self.table_C_overall = QDoubleSpinBox()
+        self.table_C_overall.setDecimals(1)
+        self.table_C_overall.setRange(0.5, 5.0)
+        self.table_C_overall.setValue(2.0)
+        self.table_C_overall.setToolTip("Coefficient for overall buckling calculation")
+        coeff_grid.addWidget(self.table_C_overall, 0, 3)
+
+        coeff_group.setLayout(coeff_grid)
+        left_layout.addWidget(coeff_group)
+
+        # Control buttons
+        button_layout = QHBoxLayout()
+        self.calculate_table_btn = QPushButton("Calculate Depths")
+        self.calculate_table_btn.clicked.connect(self.update_depth_table)
+        button_layout.addWidget(self.calculate_table_btn)
+
+        self.sync_table_btn = QPushButton("Sync with Design")
+        self.sync_table_btn.clicked.connect(self.sync_table_inputs)
+        button_layout.addWidget(self.sync_table_btn)
+
+        left_layout.addLayout(button_layout)
+
+        # Add left panel to main layout
+        depth_table_layout.addWidget(left_panel)
+
+        # Right panel for results with scroll area
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+
+        # Create scroll area for results
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        # Create widget to hold scrollable content
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+
+        # Results summary
+        self.depth_summary = QLabel("Click Calculate to see results")
+        self.depth_summary.setStyleSheet("background-color: #f0f8ff; padding: 10px; border: 1px solid #87ceeb;")
+        self.depth_summary.setWordWrap(True)
+        scroll_layout.addWidget(self.depth_summary)
+
+        # Results table
+        from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+        self.depth_table = QTableWidget()
+        self.depth_table.setColumnCount(5)
+        self.depth_table.setHorizontalHeaderLabels([
+            "Bay Number", 
+            "Start Position (m)", 
+            "End Position (m)", 
+            "Length (m)", 
+            "Safe Depth (m)"
+        ])
+        header = self.depth_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Stretch)
+        scroll_layout.addWidget(self.depth_table)
+
+        # Set scroll area content
+        scroll_area.setWidget(scroll_content)
+        right_layout.addWidget(scroll_area)
+
+        # Add right panel to main layout
+        depth_table_layout.addWidget(right_panel)
+
+        self.tabs.addTab(depth_table_tab, "Depth Table")
+
         # Load params, feedback, and initial cross section
         self.load_params()
         self.update_feedback()
@@ -547,12 +838,14 @@ class GliderGUI(QMainWindow):
         }
         
         # Select control system
-        from glider_controls import depth_pitch_control, trajectory_following_control
+        from glider_controls import depth_pitch_control, trajectory_following_control, simple_depth_control
         if control_choice == "Depth/Pitch Control":
             control_func = lambda t, s: depth_pitch_control(t, s, desired_depth, desired_pitch)
         elif control_choice == "Trajectory Following Control":
             waypoints = [np.array([0,0,desired_depth]), np.array([10,0,init_depth])]
             control_func = lambda t, s: trajectory_following_control(t, s, waypoints)
+        elif control_choice == "Simple Depth Control":
+            control_func = lambda t, s: simple_depth_control(t, s, desired_depth)
         else:
             control_func = lambda t, s: depth_pitch_control(t, s, desired_depth, desired_pitch)
         
@@ -797,9 +1090,18 @@ class GliderGUI(QMainWindow):
                 }
                 
                 # Export to CSV
-                import pandas as pd
-                df = pd.DataFrame(data)
-                df.to_csv(filename, index=False)
+                if PANDAS_AVAILABLE:
+                    df = pd.DataFrame(data)
+                    df.to_csv(filename, index=False)
+                else:
+                    # Fallback to basic CSV export
+                    import csv
+                    with open(filename, 'w', newline='') as f:
+                        writer = csv.DictWriter(f, fieldnames=data.keys())
+                        writer.writeheader()
+                        for i in range(len(next(iter(data.values())))):
+                            row = {k: v[i] for k, v in data.items()}
+                            writer.writerow(row)
                 
                 QMessageBox.information(self, "Export Successful", 
                                       f"Simulation data exported to:\n{filename}")
@@ -1475,3 +1777,205 @@ class GliderGUI(QMainWindow):
             self.metric_input.blockSignals(True)
             self.metric_input.setText("")
             self.metric_input.blockSignals(False)
+
+    def update_depth_table(self):
+        """Update the depth calculation table"""
+        try:
+            # Get input values
+            E = self.table_E_input.value()
+            nu = self.table_nu_input.value()
+            R = self.table_R_input.value()
+            t = self.table_t_input.value()
+            rho = self.table_rho_input.value()
+            g = self.table_g_input.value()
+            L = float(self.param_fields['cyl_length'].text())  # Get hull length from design tab
+
+            # Get disk positions
+            disk_text = self.table_disk_positions.text().strip()
+            if disk_text:
+                try:
+                    disk_positions = [float(x.strip()) for x in disk_text.split(',')]
+                except ValueError:
+                    # Fall back to number of internal disks
+                    n_internal = self.table_n_disks.value()
+                    if n_internal > 0:
+                        step = L / (n_internal + 1)
+                        disk_positions = [step * (i + 1) for i in range(n_internal)]
+                    else:
+                        disk_positions = []
+            else:
+                n_internal = self.table_n_disks.value()
+                if n_internal > 0:
+                    step = L / (n_internal + 1)
+                    disk_positions = [step * (i + 1) for i in range(n_internal)]
+                else:
+                    disk_positions = []
+
+            # Add end disks at 0 and L
+            disk_positions = [0] + sorted(disk_positions) + [L]
+
+            # Calculate bay properties
+            self.depth_table.setRowCount(len(disk_positions) - 1)
+            for i in range(len(disk_positions) - 1):
+                start_pos = disk_positions[i]
+                end_pos = disk_positions[i + 1]
+                bay_length = end_pos - start_pos
+
+                # Calculate safe depth for this bay
+                from glider_depth import (Material, Geometry, Env, Factors, Coefficients, 
+                                       evaluate_explicit)
+                
+                # Create objects for calculation
+                sigma_y = self.table_sigma_y_input.value()
+                material = Material(E=E, nu=nu, sigma_y=sigma_y)
+                geometry = Geometry(R=R, t=t, L=L)
+                env = Env(rho=rho, g=g)
+                factors = Factors(
+                    eta_end=self.table_eta_end.value(),
+                    kdf_overall=self.table_kdf_overall.value(),
+                    kdf_interframe=self.table_kdf_interframe.value(),
+                    phi_yield=self.table_phi_yield.value(),
+                    gamma_global=self.table_gamma_global.value()
+                )
+                coeffs = Coefficients(
+                    K_if=self.table_K_if.value(),
+                    C_overall=self.table_C_overall.value()
+                )
+                
+                # Get n value
+                n_waves_text = self.table_n_waves.currentText()
+                n_waves = None if n_waves_text == "Auto" else int(n_waves_text)
+
+                # Calculate depths
+                results = evaluate_explicit(material, geometry, disk_positions, env, factors, coeffs, n_waves)
+                safe_depth = results['h_safe_min']
+
+                # Update summary
+                n_info = (
+                    f"Optimal n = {results['optimal_n']}"
+                    if n_waves is None else
+                    f"Using n = {results['n_used']} (manual)"
+                )
+
+                # Calculate bay details for debugging
+                De = 2 * R
+                bay_details = []
+                for bay_idx, bay_length in enumerate(results['bay_lengths']):
+                    ratio = (2 * (n_waves or 4) * bay_length) / (math.pi * De)
+                    ratio_sq = ratio ** 2
+                    
+                    # Calculate pressures for this bay
+                    p_membrane = (2 * E / ((n_waves or 4)**2 - 1) * (1 + ratio_sq) ** 2) * (t/De)
+                    p_bending = (2 * E / (3 * (1 - nu**2))) * ((n_waves or 4)**2 - 1 - 
+                               ((2 * (n_waves or 4)**2 - 1 - nu) / (1 - ratio_sq)) * 
+                               (t/De) ** 3)
+                    p_total = p_membrane + p_bending
+                    
+                    # Convert to different units
+                    p_membrane_mpa = p_membrane / 1e6
+                    p_membrane_gpa = p_membrane / 1e9
+                    p_membrane_atm = p_membrane / 101325  # 1 atm = 101325 Pa
+                    
+                    p_bending_mpa = p_bending / 1e6
+                    p_bending_gpa = p_bending / 1e9
+                    p_bending_atm = p_bending / 101325
+                    
+                    p_total_mpa = p_total / 1e6
+                    p_total_gpa = p_total / 1e9
+                    p_total_atm = p_total / 101325
+                    
+                    bay_details.append(
+                        f"Bay {bay_idx+1}:<br/>"
+                        f"• Length: {bay_length:.3f} m<br/>"
+                        f"• (2nL/πDe)² = {ratio_sq:.3f}<br/>"
+                        f"• Membrane pressure: {p_membrane_mpa:.1f} MPa / {p_membrane_gpa:.3f} GPa / {p_membrane_atm:.1f} atm<br/>"
+                        f"• Bending pressure: {p_bending_mpa:.1f} MPa / {p_bending_gpa:.3f} GPa / {p_bending_atm:.1f} atm<br/>"
+                        f"• Total pressure: {p_total_mpa:.1f} MPa / {p_total_gpa:.3f} GPa / {p_total_atm:.1f} atm"
+                    )
+
+                # Convert depths to different units
+                h_interframe_ft = results['h_safe_interframe'] * 3.28084  # m to ft
+                h_overall_ft = results['h_safe_overall'] * 3.28084
+                h_yield_ft = results['h_safe_yielding'] * 3.28084
+                h_min_ft = results['h_safe_min'] * 3.28084
+                
+                # Calculate safety factor
+                desired_depth = self.table_desired_depth.value()
+                safety_factor = results['h_safe_min'] / desired_depth if desired_depth > 0 else float('inf')
+                
+                # Safety factor color coding
+                if safety_factor >= 2.0:
+                    safety_color = "green"
+                    safety_status = "Excellent"
+                elif safety_factor >= 1.5:
+                    safety_color = "orange"
+                    safety_status = "Good"
+                elif safety_factor >= 1.0:
+                    safety_color = "red"
+                    safety_status = "Marginal"
+                else:
+                    safety_color = "darkred"
+                    safety_status = "Unsafe"
+                
+                summary = f"""
+                <h3>Depth Analysis Results</h3>
+                <p><b>Safe Depths:</b></p>
+                <ul>
+                    <li>Interframe (Bay) Buckling: {results['h_safe_interframe']:.1f} m / {h_interframe_ft:.1f} ft</li>
+                    <li>Overall (Global) Buckling: {results['h_safe_overall']:.1f} m / {h_overall_ft:.1f} ft</li>
+                    <li>Yielding: {results['h_safe_yielding']:.1f} m / {h_yield_ft:.1f} ft</li>
+                </ul>
+                <p><b>Controlling Mode:</b> {results['mode_controlling']}</p>
+                <p><b>Minimum Safe Depth:</b> <span style='color: red; font-weight: bold;'>{results['h_safe_min']:.1f} m / {h_min_ft:.1f} ft</span></p>
+                <p><b>Effective Diameter (De):</b> {2*R:.3f} m / {(2*R)*3.28084:.3f} ft</p>
+                <p><b>Circumferential Waves:</b> {n_info}</p>
+                <p><b>Safety Analysis:</b></p>
+                <ul>
+                    <li>Desired Operating Depth: {desired_depth:.1f} m / {desired_depth*3.28084:.1f} ft</li>
+                    <li>Safety Factor: <span style='color: {safety_color}; font-weight: bold;'>{safety_factor:.2f} ({safety_status})</span></li>
+                </ul>
+                <p><b>Bay Analysis:</b></p>
+                <ul>
+                    {"".join(f"<li>{detail}</li>" for detail in bay_details)}
+                </ul>
+                <p><i>Note: High values of (2nL/πDe)² may give unrealistic results</i></p>
+                <p><i>Safety Factor: ≥2.0 (Excellent), ≥1.5 (Good), ≥1.0 (Marginal), <1.0 (Unsafe)</i></p>
+                """
+                self.depth_summary.setText(summary)
+
+                # Update table for this bay
+                bay_idx = i  # Current bay index
+                self.depth_table.setItem(bay_idx, 0, QTableWidgetItem(str(bay_idx+1)))
+                self.depth_table.setItem(bay_idx, 1, QTableWidgetItem(f"{start_pos:.3f}"))
+                self.depth_table.setItem(bay_idx, 2, QTableWidgetItem(f"{end_pos:.3f}"))
+                self.depth_table.setItem(bay_idx, 3, QTableWidgetItem(f"{bay_length:.3f}"))
+                self.depth_table.setItem(bay_idx, 4, QTableWidgetItem(f"{safe_depth:.1f}"))
+
+        except Exception as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Calculation Error", str(e))
+
+    def sync_table_inputs(self):
+        """Sync inputs from the design tab"""
+        try:
+            # Sync disk positions from design tab
+            if 'piston_position' in self.param_fields and 'ballast_position' in self.param_fields:
+                piston_pos = [float(x.strip()) for x in self.param_fields['piston_position'].text().split(',')][0]
+                ballast_pos = [float(x.strip()) for x in self.param_fields['ballast_position'].text().split(',')][0]
+                self.table_disk_positions.setText(f"{piston_pos}, {ballast_pos}")
+
+            # Sync other parameters
+            if 'hull_radius' in self.param_fields:
+                self.table_R_input.setValue(float(self.param_fields['hull_radius'].text()))
+            if 'hull_thickness' in self.param_fields:
+                self.table_t_input.setValue(float(self.param_fields['hull_thickness'].text()))
+            if 'rho_water' in self.param_fields:
+                self.table_rho_input.setValue(float(self.param_fields['rho_water'].text()))
+            # Note: Young's modulus and yield strength are typically material properties that may not be in the design tab
+
+            # Update the table
+            self.update_depth_table()
+
+        except Exception as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Sync Error", str(e))

@@ -560,6 +560,8 @@ class UnderwaterGlider:
         self.ddx_p = 0.0
         # state layout changed: add piston velocity state at index 15
         self.state0 = np.zeros(17)
+        # Initialize quaternion to identity (no rotation)
+        self.state0[3:7] = [0.0, 0.0, 0.0, 1.0]
         self.state0[13] = self.rho_water * self.V_ballast_neutral
         self.state0[14] = 0.0  # piston position
         self.state0[15] = 0.0  # piston velocity
