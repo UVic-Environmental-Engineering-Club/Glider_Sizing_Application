@@ -356,13 +356,13 @@ class UnderwaterGlider:
         V_cyl = self._pi * self._hull_radius_sq * self.cyl_length
         cyl_cg_x = self.nose_length + 0.5 * self.cyl_length
 
-        # Nose approximated as half-sphere for volume
-        V_nose = 0.5 * (4.0/3.0) * self._pi * self.nose_radius**3
-        nose_cg_x = 0.5 * self.nose_length  
+        # Nose approximated as cone for volume
+        V_nose = (1.0/3.0) * self._pi * self.nose_radius**2 * self.nose_length
+        nose_cg_x = (1.0/3.0) * self.nose_length  
 
-        # Tail approximated as quarter-sphere (smaller)
-        V_tail = 0.25 * (4.0/3.0) * self._pi * self.tail_radius**3
-        tail_cg_x = self.nose_length + self.cyl_length + 0.5 * self.tail_length * 0.5
+        # Tail approximated as cone for volume
+        V_tail = (1.0/3.0) * self._pi * self.tail_radius**2 * self.tail_length
+        tail_cg_x = self.nose_length + self.cyl_length + (2.0/3.0) * self.tail_length
 
         V_total = V_nose + V_cyl + V_tail
         # center of buoyancy x-coordinate (in body frame)
