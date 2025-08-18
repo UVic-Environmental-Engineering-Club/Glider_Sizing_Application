@@ -2,6 +2,109 @@ import numpy as np
 from scipy.integrate import solve_ivp
 from glider_physics import UnderwaterGlider
 
+import os
+import json
+import csv
+from scipy.interpolate import interp1d
+
+def _normalize_cfd_rows(rows):
+    """Normalize rows to ndarray with columns [AoA_deg, Cd_x, Cd_y, Cd_z, CL, CM] and sort by AoA."""
+    arr = np.asarray(rows, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] != 6:
+        raise ValueError(f"CFD table must be Nx6, got shape {arr.shape}")
+    # sort by AoA column 0
+    idx = np.argsort(arr[:, 0])
+    return arr[idx]
+
+def load_cfd_table_from_file(path: str) -> np.ndarray:
+    """
+    Load a CFD table from CSV or JSON.
+    Expected columns/order: [AoA_deg, Cd_x, Cd_y, Cd_z, CL, CM]
+    JSON can be:
+      - list of lists [[AoA, Cd_x, ...], ...]
+      - list of dicts [{"AoA_deg":..., "Cd_x":..., ...}, ...]
+    """
+    ext = os.path.splitext(path)[1].lower()
+    if ext in [".csv", ".txt"]:
+        rows = []
+        with open(path, newline="", encoding="utf-8") as f:
+            sniffer = csv.Sniffer()
+            sample = f.read(1024)
+            f.seek(0)
+            has_header = sniffer.has_header(sample)
+            reader = csv.reader(f)
+            header = None
+            if has_header:
+                header = next(reader)
+                header_lower = [h.strip().lower() for h in header]
+                try:
+                    col_map = {
+                        'aoa_deg': header_lower.index('aoa_deg'),
+                        'cd_x': header_lower.index('cd_x'),
+                        'cd_y': header_lower.index('cd_y'),
+                        'cd_z': header_lower.index('cd_z'),
+                        'cl': header_lower.index('cl'),
+                        'cm': header_lower.index('cm'),
+                    }
+                    for row in reader:
+                        if not row or all(c.strip()=='' for c in row):
+                            continue
+                        rows.append([
+                            row[col_map['aoa_deg']], row[col_map['cd_x']], row[col_map['cd_y']],
+                            row[col_map['cd_z']], row[col_map['cl']], row[col_map['cm']]
+                        ])
+                except ValueError:
+                    # Fallback: treat as no header
+                    rows = []
+                    f.seek(0)
+                    reader = csv.reader(f)
+                    for row in reader:
+                        if not row or all(c.strip()=='' for c in row):
+                            continue
+                        rows.append(row[:6])
+            else:
+                for row in reader:
+                    if not row or all(c.strip()=='' for c in row):
+                        continue
+                    rows.append(row[:6])
+        return _normalize_cfd_rows(rows)
+    elif ext == ".json":
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list) and len(data) > 0:
+            if isinstance(data[0], dict):
+                rows = []
+                for d in data:
+                    rows.append([
+                        d.get('AoA_deg') if 'AoA_deg' in d else d.get('aoa_deg'),
+                        d.get('Cd_x') if 'Cd_x' in d else d.get('cd_x'),
+                        d.get('Cd_y') if 'Cd_y' in d else d.get('cd_y'),
+                        d.get('Cd_z') if 'Cd_z' in d else d.get('cd_z'),
+                        d.get('CL') if 'CL' in d else d.get('cl'),
+                        d.get('CM') if 'CM' in d else d.get('cm'),
+                    ])
+                return _normalize_cfd_rows(rows)
+            else:
+                return _normalize_cfd_rows(data)
+        raise ValueError("Unsupported JSON structure for CFD table")
+    else:
+        raise ValueError(f"Unsupported CFD table file extension: {ext}")
+
+def apply_cfd_table_to_glider(glider: UnderwaterGlider, cfd_table: np.ndarray) -> None:
+    """
+    Apply a CFD table to the glider instance by setting the table and rebuilding interpolants.
+    Mirrors the logic in the physics class without modifying it.
+    """
+    table = _normalize_cfd_rows(cfd_table)
+    glider.cfd_table = table
+    aoa_deg = table[:, 0]
+    glider._interp_cd_x = interp1d(aoa_deg, table[:, 1], kind='linear', bounds_error=False, fill_value=(table[0, 1], table[-1, 1]))
+    glider._interp_cd_y = interp1d(aoa_deg, table[:, 2], kind='linear', bounds_error=False, fill_value=(table[0, 2], table[-1, 2]))
+    glider._interp_cd_z = interp1d(aoa_deg, table[:, 3], kind='linear', bounds_error=False, fill_value=(table[0, 3], table[-1, 3]))
+    glider._interp_cl   = interp1d(aoa_deg, table[:, 4], kind='linear', bounds_error=False, fill_value=(table[0, 4], table[-1, 4]))
+    glider._interp_cm   = interp1d(aoa_deg, table[:, 5], kind='linear', bounds_error=False, fill_value=(table[0, 5], table[-1, 5]))
+
+
 def run_simulation(params, control_func=None, t_end=1, dt=1, 
                   init_depth=0, init_pitch=0, solver="Radau", progress_callback=None):
     """
@@ -22,16 +125,47 @@ def run_simulation(params, control_func=None, t_end=1, dt=1,
     """
     # Initialize glider
     glider = UnderwaterGlider(params)
-    glider.reset()  # Ensure state0 is initialized
+
+    # Optional: load CFD table from file or in-memory data without modifying physics file
+    try:
+        cfd_table_path = params.get('cfd_table_path') if isinstance(params, dict) else None
+        if cfd_table_path:
+            table = load_cfd_table_from_file(cfd_table_path)
+            apply_cfd_table_to_glider(glider, table)
+        elif 'cfd_table' in params:
+            table = params['cfd_table']
+            apply_cfd_table_to_glider(glider, np.asarray(table, dtype=float))
+    except Exception as e:
+        print(f"Warning: Failed to apply external CFD table: {e}")
+    
+    # Get initial state vector and create state0 for simulation
+    state0 = glider.get_state_vector()
+    
+    # Ensure the glider has valid mass properties before simulation
+    # This prevents NaN/inf values in inertia calculations
+    if glider.mass is None or glider.mass <= 0:
+        print("Warning: Invalid mass detected, recalculating...")
+        glider._calculate_mass_properties()
+        glider._calculate_inertia()
+        state0 = glider.get_state_vector()
+    
+    # Verify state vector is valid
+    if np.any(np.isnan(state0)) or np.any(np.isinf(state0)):
+        print("Warning: Invalid state detected, resetting to defaults...")
+        # Reset to safe defaults
+        state0 = np.zeros(17)
+        state0[3] = 1.0  # Identity quaternion
+        glider.set_state_vector(state0)
+        state0 = glider.get_state_vector()
     
     # Set initial depth (z position, index 2)
-    glider.state0[2] = init_depth
+    state0[2] = init_depth
     
     # Set initial pitch (quaternion, indices 3:7)
     # Start with identity quaternion, then rotate about y by pitch (degrees)
     from scipy.spatial.transform import Rotation as R
     quat = R.from_euler('y', init_pitch, degrees=True).as_quat()  # [x, y, z, w]
-    glider.state0[3:7] = quat
+    state0[3:7] = quat
     
     # Time points
     t_eval = np.arange(0, t_end, dt)
@@ -48,9 +182,21 @@ def run_simulation(params, control_func=None, t_end=1, dt=1,
                 # Call control function to get control inputs
                 dm_dt, dx_dt = control_func(t, y)
                 
-                # Set control inputs on the glider object
-                glider.dm_ballast_dt = dm_dt
-                glider.dx_p_dt = dx_dt
+                # Apply control inputs by updating the glider state
+                # For ballast control, we'll modify the fill fraction directly
+                if dm_dt != 0.0:
+                    # Calculate tank volume for ballast control
+                    tank_volume = np.pi * (glider.ballast_radius - glider.tank_thickness)**2 * glider.ballast_length
+                    dV_dt = dm_dt / glider.rho_water
+                    current_fill = y[13]  # ballast fill from state vector
+                    new_fill = np.clip(current_fill + (dV_dt * dt) / tank_volume, 0.0, 1.0)
+                    y[13] = new_fill
+                
+                # For MVM control, we'll modify the MVM offset directly
+                if dx_dt != 0.0:
+                    current_offset_x = y[14]  # MVM x offset from state vector
+                    new_offset_x = np.clip(current_offset_x + dx_dt * dt, -glider.MVM_length/2, glider.MVM_length/2)
+                    y[14] = new_offset_x
                 
                 # Debug output (uncomment to see control values)
                 if t % 1.0 < 0.1:  # Print every ~1 second
@@ -58,22 +204,40 @@ def run_simulation(params, control_func=None, t_end=1, dt=1,
                 
             except Exception as e:
                 print(f"Control function error at t={t}: {e}")
-                # Fallback to no control
-                glider.dm_ballast_dt = 0.0
-                glider.dx_p_dt = 0.0
+                # Fallback to no control - do nothing
         
         # Calculate progress based on current time
         if progress_callback:
             progress = int(10 + (t / t_end) * 80)  # 10-90% during simulation
             progress_callback(progress)
         
-        return glider.dynamics(t, y)
+        # Safety check: ensure state vector is valid
+        if np.any(np.isnan(y)) or np.any(np.isinf(y)):
+            print(f"Warning: Invalid state detected at t={t}, resetting...")
+            # Return zero derivatives for invalid state
+            return np.zeros_like(y)
+        
+        # Use the available compute_state_derivatives method
+        try:
+            derivatives = glider.compute_state_derivatives(t, y)
+            
+            # Safety check: ensure derivatives are valid
+            if np.any(np.isnan(derivatives)) or np.any(np.isinf(derivatives)):
+                print(f"Warning: Invalid derivatives detected at t={t}, using zeros...")
+                return np.zeros_like(y)
+            
+            return derivatives
+            
+        except Exception as e:
+            print(f"Error in dynamics at t={t}: {e}")
+            # Return zero derivatives on error
+            return np.zeros_like(y)
     
     # Run simulation
     sol = solve_ivp(
         dynamics_with_progress,
         [0, t_end],
-        glider.state0,
+        state0,
         t_eval=t_eval,
         method=solver
     )

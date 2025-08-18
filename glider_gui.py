@@ -96,7 +96,7 @@ class GliderGUI(QMainWindow):
         scroll.setWidget(param_widget)
         # Make the scroll area a fixed width for better balance
         scroll.setMinimumWidth(350)
-        scroll.setMaximumWidth(400)
+        scroll.setMaximumWidth(800)
         design_layout.addWidget(scroll, stretch=0)
         # Right: Feedback and summary stacked above render
         right_panel = QVBoxLayout()
@@ -550,12 +550,13 @@ class GliderGUI(QMainWindow):
         # Hull group
         hull_group = QGroupBox("Hull Parameters")
         hull_layout = QVBoxLayout()
-        self._add_parameter_field(hull_layout, "nose_length", "Nose Length (m)", "0.3")
-        self._add_parameter_field(hull_layout, "nose_radius", "Nose Radius (m)", "0.15")
-        self._add_parameter_field(hull_layout, "cyl_length", "Cylinder Length (m)", "1.4")
-        self._add_parameter_field(hull_layout, "hull_radius", "Hull Radius (m)", "0.15")
+        self._add_parameter_field(hull_layout, "nose_length", "Nose Length (m)", "0.4")
+        self._add_parameter_field(hull_layout, "nose_radius", "Nose Radius (m)", "0.08")
+        self._add_parameter_field(hull_layout, "cyl_length", "Cylinder Length (m)", "0.9")
+        self._add_parameter_field(hull_layout, "hull_radius", "Hull Radius (m)", "0.08")
         self._add_parameter_field(hull_layout, "tail_length", "Tail Length (m)", "0.3")
-        self._add_parameter_field(hull_layout, "tail_radius", "Tail Radius (m)", "0.12")
+        self._add_parameter_field(hull_layout, "tail_radius", "Tail Radius (m)", "0.04")
+        self._add_parameter_field(hull_layout, "glider_length", "Glider Length (m)", "1.6")
         self._add_parameter_field(hull_layout, "hull_thickness", "Hull Thickness (m)", "0.005")
         self._add_parameter_field(hull_layout, "hull_density", "Hull Density (kg/m³)", "2700")
         hull_group.setLayout(hull_layout)
@@ -564,11 +565,13 @@ class GliderGUI(QMainWindow):
         # Ballast group
         ballast_group = QGroupBox("Ballast System")
         ballast_layout = QVBoxLayout()
-        self._add_parameter_field(ballast_layout, "ballast_radius", "Ballast Radius (m)", "0.08")
-        self._add_parameter_field(ballast_layout, "ballast_length", "Ballast Length (m)", "0.4")
+        self._add_parameter_field(ballast_layout, "ballast_radius", "Ballast Radius (m)", "0.05")
+        self._add_parameter_field(ballast_layout, "ballast_length", "Ballast Length (m)", "0.2")
         self._add_parameter_field(ballast_layout, "tank_thickness", "Tank Thickness (m)", "0.004")
-        self._add_parameter_field(ballast_layout, "tank_density", "Tank Density (kg/m³)", "2700")
-        self._add_parameter_field(ballast_layout, "ballast_position", "Ballast Position (x,y,z)", "0.8,0,0")
+        self._add_parameter_field(ballast_layout, "tank_density", "Tank Density (kg/m³)", "1200")
+        self._add_parameter_field(ballast_layout, "ballast_base_position", "Ballast Base Position (x,y,z)", "0.6,0,0")
+        self._add_parameter_field(ballast_layout, "current_fill", "Initial Ballast Fill (0-1)", "0.0")
+        self._add_parameter_field(ballast_layout, "max_ballast_flow", "Max Ballast Flow (m³/s)", "0.001")
         ballast_group.setLayout(ballast_layout)
         geom_layout.addWidget(ballast_group)
         
@@ -582,13 +585,12 @@ class GliderGUI(QMainWindow):
         # Mass properties group
         mass_group = QGroupBox("Mass Properties")
         mass_group_layout = QVBoxLayout()
-        self._add_parameter_field(mass_group_layout, "fixed_mass", "Fixed Mass (kg)", "20.0")
-        self._add_parameter_field(mass_group_layout, "fixed_position", "Fixed Mass Position (x,y,z)", "0.7,0,0")
-        self._add_parameter_field(mass_group_layout, "actuator_mass", "Actuator Mass (kg)", "2.0")
-        self._add_parameter_field(mass_group_layout, "actuator_position", "Actuator Position (x,y,z)", "0.6,0,0")
-        self._add_parameter_field(mass_group_layout, "piston_mass", "Piston Mass (kg)", "5.0")
-        self._add_parameter_field(mass_group_layout, "piston_position", "Piston Position (x,y,z)", "0.6,0,0")
-        self._add_parameter_field(mass_group_layout, "piston_travel", "Piston Travel (m)", "0.5")
+        self._add_parameter_field(mass_group_layout, "fixed_mass", "Fixed Mass (kg)", "3.0")
+        self._add_parameter_field(mass_group_layout, "fixed_position", "Fixed Mass Position (x,y,z)", "0.4,0,0")
+        self._add_parameter_field(mass_group_layout, "MVM_mass", "Moving Mass (kg)", "5.0")
+        self._add_parameter_field(mass_group_layout, "Moving_Mass_base_position", "MVM Base Position (x,y,z)", "0.5,0,0")
+        self._add_parameter_field(mass_group_layout, "MVM_length", "MVM Travel Length (m)", "0.5")
+        self._add_parameter_field(mass_group_layout, "piston_mass", "Piston Mass (kg)", "0.8")
         self._add_parameter_field(mass_group_layout, "I_dry_base", "Dry Inertia (diag) kg·m²", "2.0,3.0,1.5")
         mass_group.setLayout(mass_group_layout)
         mass_layout.addWidget(mass_group)
@@ -602,27 +604,109 @@ class GliderGUI(QMainWindow):
         
         hydro_group = QGroupBox("Hydrodynamic Properties")
         hydro_group_layout = QVBoxLayout()
-        self._add_parameter_field(hydro_group_layout, "wing_span", "Wing Span (m)", "1.0")
-        self._add_parameter_field(hydro_group_layout, "wing_chord", "Wing Chord (m)", "0.15")
-        self._add_parameter_field(hydro_group_layout, "wing_position", "Wing Position (x,y,z)", "0.9,0,0")
-        self._add_parameter_field(hydro_group_layout, "glider_length", "Glider Length (m)", "2.0")
-        self._add_parameter_field(hydro_group_layout, "CD0", "Zero-Lift Drag", "0.1")
-        self._add_parameter_field(hydro_group_layout, "CL_alpha", "Lift Slope", "6.28")
-        self._add_parameter_field(hydro_group_layout, "CD_alpha", "Drag Alpha Coeff", "0.5")
-        self._add_parameter_field(hydro_group_layout, "CM0", "Zero-Alpha Moment", "-0.02")
-        self._add_parameter_field(hydro_group_layout, "CM_alpha", "Moment Alpha Slope", "-0.1")
+        self._add_parameter_field(hydro_group_layout, "wing_area", "Wing Area (m²)", "0.04")
         hydro_group.setLayout(hydro_group_layout)
         hydro_layout.addWidget(hydro_group)
+        
+        # Added Mass group
+        added_mass_group = QGroupBox("Added Mass Properties")
+        added_mass_layout = QVBoxLayout()
+        self._add_parameter_field(added_mass_layout, "added_mass_x", "Added Mass X (kg)", "5.0")
+        self._add_parameter_field(added_mass_layout, "added_mass_y", "Added Mass Y (kg)", "12.0")
+        self._add_parameter_field(added_mass_layout, "added_mass_z", "Added Mass Z (kg)", "12.0")
+        self._add_parameter_field(added_mass_layout, "added_Ixx", "Added Inertia XX (kg·m²)", "0.05")
+        self._add_parameter_field(added_mass_layout, "added_Iyy", "Added Inertia YY (kg·m²)", "0.12")
+        self._add_parameter_field(added_mass_layout, "added_Izz", "Added Inertia ZZ (kg·m²)", "0.12")
+        added_mass_group.setLayout(added_mass_layout)
+        hydro_layout.addWidget(added_mass_group)
+        
+        # CFD Table group
+        cfd_group = QGroupBox("CFD Table (Optional)")
+        cfd_layout = QVBoxLayout()
+        
+        # Information about the CFD system
+        cfd_info_header = QLabel("All hydrodynamic coefficients (Cd_x, Cd_y, Cd_z, CL, CM) are now loaded from CFD tables.")
+        cfd_info_header.setStyleSheet("color: blue; font-weight: bold; font-size: 11px;")
+        cfd_layout.addWidget(cfd_info_header)
+        
+        # CFD table file path display and picker
+        cfd_file_layout = QHBoxLayout()
+        cfd_file_layout.addWidget(QLabel("CFD Table File:"))
+        self.cfd_file_path = QLineEdit()
+        self.cfd_file_path.setPlaceholderText("No file selected - using default coefficients")
+        self.cfd_file_path.setReadOnly(True)
+        cfd_file_layout.addWidget(self.cfd_file_path)
+        
+        cfd_browse_btn = QPushButton("Browse...")
+        cfd_browse_btn.clicked.connect(self.browse_cfd_file)
+        cfd_file_layout.addWidget(cfd_browse_btn)
+        
+        cfd_layout.addLayout(cfd_file_layout)
+        
+        # CFD table status
+        self.cfd_status_label = QLabel("Status: Using default CFD table coefficients")
+        self.cfd_status_label.setStyleSheet("color: gray; font-size: 10px;")
+        cfd_layout.addWidget(self.cfd_status_label)
+        
+        # CFD table info
+        cfd_info_layout = QHBoxLayout()
+        cfd_info_layout.addWidget(QLabel("Format:"))
+        cfd_info_label = QLabel("CSV/JSON with columns: [AoA_deg, Cd_x, Cd_y, Cd_z, CL, CM]")
+        cfd_info_label.setStyleSheet("color: gray; font-size: 10px;")
+        cfd_info_layout.addWidget(cfd_info_label)
+        cfd_layout.addLayout(cfd_info_layout)
+        
+        # Clear CFD table button
+        cfd_clear_btn = QPushButton("Clear CFD Table (Use Defaults)")
+        cfd_clear_btn.clicked.connect(self.clear_cfd_table)
+        cfd_layout.addWidget(cfd_clear_btn)
+        
+        cfd_group.setLayout(cfd_layout)
+        hydro_layout.addWidget(cfd_group)
         
         hydro_tab.setLayout(hydro_layout)
         self.param_panel.addTab(hydro_tab, "Hydrodynamics")
         
-        # Add all params to GUI, including those currently hardcoded in run_simulation.py
-        # Geometry tab additions
-        self._add_parameter_field(hull_layout, "rho_water", "Water Density (kg/m³)", "1025.0")
-        # Hydrodynamics tab additions
-        self._add_parameter_field(hydro_group_layout, "desired_depth", "Desired Depth (m)", "20")
-        self._add_parameter_field(hydro_group_layout, "desired_pitch", "Desired Pitch (deg)", "0")
+        # Initial Conditions tab
+        init_tab = QWidget()
+        init_layout = QVBoxLayout()
+        
+        # Velocity initial conditions
+        vel_group = QGroupBox("Initial Velocity")
+        vel_layout = QVBoxLayout()
+        self._add_parameter_field(vel_layout, "u", "Initial Surge Velocity (m/s)", "0.0")
+        self._add_parameter_field(vel_layout, "v", "Initial Sway Velocity (m/s)", "0.0")
+        self._add_parameter_field(vel_layout, "w", "Initial Heave Velocity (m/s)", "0.0")
+        vel_group.setLayout(vel_layout)
+        init_layout.addWidget(vel_group)
+        
+        # Angular velocity initial conditions
+        ang_vel_group = QGroupBox("Initial Angular Velocity")
+        ang_vel_layout = QVBoxLayout()
+        self._add_parameter_field(ang_vel_layout, "p", "Initial Roll Rate (rad/s)", "0.0")
+        self._add_parameter_field(ang_vel_layout, "q", "Initial Pitch Rate (rad/s)", "0.0")
+        self._add_parameter_field(ang_vel_layout, "r", "Initial Yaw Rate (rad/s)", "0.0")
+        ang_vel_group.setLayout(ang_vel_layout)
+        init_layout.addWidget(ang_vel_group)
+        
+        init_tab.setLayout(init_layout)
+        self.param_panel.addTab(init_tab, "Initial Conditions")
+        
+        # Environment tab
+        env_tab = QWidget()
+        env_layout = QVBoxLayout()
+        
+        env_group = QGroupBox("Environment")
+        env_layout_group = QVBoxLayout()
+        self._add_parameter_field(env_layout_group, "rho_water", "Water Density (kg/m³)", "1025.0")
+        self._add_parameter_field(env_layout_group, "g", "Gravity (m/s²)", "9.81")
+        self._add_parameter_field(env_layout_group, "desired_depth", "Desired Depth (m)", "20")
+        self._add_parameter_field(env_layout_group, "desired_pitch", "Desired Pitch (deg)", "0")
+        env_group.setLayout(env_layout_group)
+        env_layout.addWidget(env_group)
+        
+        env_tab.setLayout(env_layout)
+        self.param_panel.addTab(env_tab, "Environment")
         
     def _add_parameter_field(self, layout, name, label, default):
         hbox = QHBoxLayout()
@@ -631,8 +715,37 @@ class GliderGUI(QMainWindow):
         self.param_fields[name] = field
         hbox.addWidget(field)
         layout.addLayout(hbox)
-        # Remove auto-update connection
-        # field.textChanged.connect(self.on_param_changed)
+
+    def browse_cfd_file(self):
+        """Open file dialog to select a CFD table file"""
+        from PyQt5.QtWidgets import QFileDialog
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select CFD Table File",
+            "",
+            "CFD Table Files (*.csv *.json);;CSV Files (*.csv);;JSON Files (*.json);;All Files (*.*)"
+        )
+        if file_path:
+            self.cfd_file_path.setText(file_path)
+            # Store the path in params for simulation
+            if not hasattr(self, 'cfd_table_path'):
+                self.cfd_table_path = file_path
+            else:
+                self.cfd_table_path = file_path
+            # Update status
+            self.cfd_status_label.setText(f"Status: Using external CFD table from {os.path.basename(file_path)}")
+            self.cfd_status_label.setStyleSheet("color: green; font-size: 10px;")
+            print(f"[CFD] Selected file: {file_path}")
+
+    def clear_cfd_table(self):
+        """Clear the selected CFD table file and revert to defaults"""
+        self.cfd_file_path.clear()
+        if hasattr(self, 'cfd_table_path'):
+            delattr(self, 'cfd_table_path')
+        # Update status
+        self.cfd_status_label.setText("Status: Using default CFD table coefficients")
+        self.cfd_status_label.setStyleSheet("color: gray; font-size: 10px;")
+        print("[CFD] Cleared CFD table - using default CFD table coefficients")
         
     def on_apply_changes(self):
         self.save_params()
@@ -678,6 +791,12 @@ class GliderGUI(QMainWindow):
             except ValueError:
                 print(f"Invalid input for {name}")
                 return None
+        
+        # Add CFD table path if selected
+        if hasattr(self, 'cfd_table_path') and self.cfd_table_path:
+            params['cfd_table_path'] = self.cfd_table_path
+            print(f"[CFD] Including CFD table path in simulation: {self.cfd_table_path}")
+        
         return params
     
     def update_feedback(self):
@@ -697,8 +816,7 @@ class GliderGUI(QMainWindow):
             tank_thickness = float(self.param_fields['tank_thickness'].text())
             tank_density = float(self.param_fields['tank_density'].text())
             fixed_mass = float(self.param_fields['fixed_mass'].text())
-            actuator_mass = float(self.param_fields['actuator_mass'].text())
-            piston_mass = float(self.param_fields['piston_mass'].text())
+            mvm_mass = float(self.param_fields['MVM_mass'].text())
             
             # Volumes
             V_hull = (1/3) * np.pi * nose_radius**2 * nose_length \
@@ -707,14 +825,14 @@ class GliderGUI(QMainWindow):
             V_ballast = np.pi * ballast_radius**2 * ballast_length
             ballast_mass_50 = rho_water * V_ballast * 0.5
             
-            # Dry mass
+            # mass
             m_hull = (
                 np.pi * nose_radius * np.sqrt(nose_radius**2 + nose_length**2)
                 + 2 * np.pi * hull_radius * cyl_length
                 + np.pi * tail_radius * np.sqrt(tail_radius**2 + tail_length**2)
             ) * hull_thickness * hull_density
             m_tank = 2 * np.pi * ballast_radius * ballast_length * tank_thickness * tank_density
-            dry_mass = m_hull + m_tank + fixed_mass + actuator_mass + piston_mass
+            dry_mass = m_hull + m_tank + fixed_mass + mvm_mass
             total_mass_50 = dry_mass + ballast_mass_50
             buoyant_mass = rho_water * V_hull
             extra_mass = buoyant_mass - total_mass_50
@@ -748,15 +866,15 @@ class GliderGUI(QMainWindow):
             tail_radius = float(self.param_fields['tail_radius'].text())
             ballast_radius = float(self.param_fields['ballast_radius'].text())
             ballast_length = float(self.param_fields['ballast_length'].text())
-            # Use ballast_position and piston_position from design tab
-            ballast_pos = [float(x) for x in self.param_fields['ballast_position'].text().split(',')]
-            moving_mass_pos = [float(x) for x in self.param_fields['piston_position'].text().split(',')]
+            ballast_pos = [float(x) for x in self.param_fields['ballast_base_position'].text().split(',')]
+            moving_mass_pos = [float(x) for x in self.param_fields['Moving_Mass_base_position'].text().split(',')]
             total_length = nose_length + cyl_length + tail_length
             ballast_x = ballast_pos[0]
             moving_mass_x = moving_mass_pos[0]
             self.cross_fig.clear()
             ax = self.cross_fig.add_subplot(111)
             # Draw torpedo-like hull: ellipse for nose, rectangle for body, ellipse for tail
+            # NOTE: fix the end cones
             # Main body (cylinder)
             cyl_x = nose_length
             body = patches.Rectangle((cyl_x, -hull_radius), cyl_length, 2*hull_radius, color='#bbb', alpha=0.9, lw=2)
@@ -779,15 +897,11 @@ class GliderGUI(QMainWindow):
             cb_x = cg_x + 0.05 * total_length
             ax.plot([cg_x], [0], marker='o', color='green', markersize=10, label='CG')
             ax.plot([cb_x], [0], marker='s', color='cyan', markersize=10, label='CB')
-            # Wings (optional, as a line)
-            wing_span = float(self.param_fields.get('wing_span', QLineEdit('1.0')).text())
-            # Use wing_position from design tab if available
-            if 'wing_position' in self.param_fields:
-                wing_pos = [float(x) for x in self.param_fields['wing_position'].text().split(',')]
-                wing_x = wing_pos[0]
-            else:
-                wing_x = nose_length + cyl_length * 0.7
-            ax.plot([wing_x, wing_x], [-wing_span/2, wing_span/2], color='purple', lw=4, label='Wings')
+            # Wings (using wing_area from new physics engine)
+            wing_area = float(self.param_fields.get('wing_area', QLineEdit('0.04')).text())
+            wing_span = np.sqrt(wing_area * 4)  # Approximate span from area
+            wing_x = nose_length + cyl_length * 0.7  # Fixed position for wings
+            ax.plot([wing_x, wing_x], [-wing_span/2, wing_span/2], color='purple', lw=2)
             # Labels and legend
             ax.set_xlim(-0.1, total_length + 0.2)
             ax.set_ylim(-max(nose_radius, hull_radius, tail_radius, ballast_radius, 0.2)*1.5, max(nose_radius, hull_radius, tail_radius, ballast_radius, 0.2)*1.5)
@@ -814,7 +928,6 @@ class GliderGUI(QMainWindow):
         if params is None:
             return
             
-        params['wing_area'] = params['wing_span'] * params['wing_chord']
         
         # Get simulation settings from GUI
         dt = self.dt_spin.value()
@@ -989,14 +1102,15 @@ class GliderGUI(QMainWindow):
                         settling_time = solution.t[i]
                         break
             
-            # Ballast and piston analysis
-            ballast_mass = solution.y[13, :]
-            piston_position = solution.y[14, :]
-            piston_velocity = solution.y[15, :]
+            # Ballast and MVM analysis
+            ballast_fill = solution.y[13, :]  # Ballast fill level (0-1)
+            mvm_offset_x = solution.y[14, :]  # MVM offset in x direction
+            mvm_offset_y = solution.y[15, :]  # MVM offset in y direction
+            mvm_offset_z = solution.y[16, :]  # MVM offset in z direction
             
-            ballast_change = ballast_mass[-1] - ballast_mass[0]
-            piston_travel_used = piston_position[-1] - piston_position[0]
-            max_piston_velocity = np.max(np.abs(piston_velocity))
+            ballast_change = ballast_fill[-1] - ballast_fill[0]
+            mvm_travel_used = mvm_offset_x[-1] - mvm_offset_x[0]
+            max_mvm_velocity = np.max(np.abs(np.gradient(mvm_offset_x, solution.t)))
             
             # Format control summary
             control_summary = (
@@ -1008,8 +1122,8 @@ class GliderGUI(QMainWindow):
             
             actuator_summary = (
                 f"\nActuator Performance:\n"
-                f"Ballast Change: {ballast_change:.3f}kg | Piston Travel: {piston_travel_used:.3f}m\n"
-                f"Max Piston Velocity: {max_piston_velocity:.3f}m/s"
+                f"Ballast Change: {ballast_change:.3f} | MVM Travel: {mvm_travel_used:.3f}m\n"
+                f"Max MVM Velocity: {max_mvm_velocity:.3f}m/s"
             )
             
             self.control_label.setText(control_summary + actuator_summary)
@@ -1453,25 +1567,13 @@ class GliderGUI(QMainWindow):
         
         # Extract state variables
         time = solution.t
-        ballast_mass = solution.y[13, :]  # Ballast mass over time
-        piston_position = solution.y[14, :]  # Piston position over time
-        piston_velocity = solution.y[15, :]  # Piston velocity over time
+        ballast_fill = solution.y[13, :]  # Ballast fill level (0-1) over time
+        mvm_offset_x = solution.y[14, :]  # MVM offset in x direction over time
+        mvm_offset_y = solution.y[15, :]  # MVM offset in y direction over time
+        mvm_offset_z = solution.y[16, :]  # MVM offset in z direction over time
         
-        # Calculate ballast fill percentage
-        try:
-            ballast_radius = float(self.param_fields['ballast_radius'].text())
-            ballast_length = float(self.param_fields['ballast_length'].text())
-            rho_water = float(self.param_fields['rho_water'].text())
-            
-            # Maximum ballast volume and mass
-            max_ballast_volume = np.pi * ballast_radius**2 * ballast_length
-            max_ballast_mass = rho_water * max_ballast_volume
-            
-            # Fill percentage over time
-            fill_percentage = (ballast_mass / max_ballast_mass) * 100
-        except:
-            # Fallback if parameters not available
-            fill_percentage = np.zeros_like(time)
+        # Calculate ballast fill percentage (already in 0-1 range, convert to %)
+        fill_percentage = ballast_fill * 100
         
         # Plot 1: Ballast Fill Percentage vs Time
         ax1 = self.sim_fig.add_subplot(221)
@@ -1483,36 +1585,35 @@ class GliderGUI(QMainWindow):
         ax1.legend()
         ax1.set_title('Ballast Fill Percentage vs Time')
         
-        # Plot 2: Moving Mass (Piston) Position vs Time
+        # Plot 2: Moving Mass (MVM) Position vs Time
         ax2 = self.sim_fig.add_subplot(222)
-        ax2.plot(time, piston_position, 'g-', linewidth=2, label='Piston Position')
+        ax2.plot(time, mvm_offset_x, 'g-', linewidth=2, label='MVM X Offset')
         
-        # Show piston travel limits if available
+        # Show MVM travel limits if available
         try:
-            piston_travel = float(self.param_fields['piston_travel'].text())
-            if hasattr(self, 'piston_set_pos') and self.piston_set_pos is not None:
-                min_pos = self.piston_set_pos
-                max_pos = self.piston_set_pos + piston_travel
-                ax2.axhline(y=min_pos, color='r', linestyle='--', alpha=0.7, label='Min Position')
-                ax2.axhline(y=max_pos, color='r', linestyle='--', alpha=0.7, label='Max Position')
+            mvm_length = float(self.param_fields['MVM_length'].text())
+            max_offset = mvm_length / 2  # Assume symmetric around base position
+            ax2.axhline(y=-max_offset, color='r', linestyle='--', alpha=0.7, label='Min Offset')
+            ax2.axhline(y=max_offset, color='r', linestyle='--', alpha=0.7, label='Max Offset')
         except:
             pass
             
-        ax2.set_ylabel('Piston Position (m)')
+        ax2.set_ylabel('MVM X Offset (m)')
         ax2.set_xlabel('Time (s)')
         ax2.grid(True)
         ax2.legend()
-        ax2.set_title('Moving Mass Position vs Time')
+        ax2.set_title('Moving Mass X Offset vs Time')
         
-        # Plot 3: Piston Velocity vs Time
+        # Plot 3: MVM Velocity vs Time
         ax3 = self.sim_fig.add_subplot(223)
-        ax3.plot(time, piston_velocity, 'm-', linewidth=2, label='Piston Velocity')
+        mvm_velocity = np.gradient(mvm_offset_x, time)
+        ax3.plot(time, mvm_velocity, 'm-', linewidth=2, label='MVM X Velocity')
         ax3.axhline(y=0, color='k', linestyle='-', alpha=0.3)
-        ax3.set_ylabel('Piston Velocity (m/s)')
+        ax3.set_ylabel('MVM X Velocity (m/s)')
         ax3.set_xlabel('Time (s)')
         ax3.grid(True)
         ax3.legend()
-        ax3.set_title('Moving Mass Velocity vs Time')
+        ax3.set_title('Moving Mass X Velocity vs Time')
         
         # Plot 4: Control System Response Analysis
         ax4 = self.sim_fig.add_subplot(224)
@@ -1544,14 +1645,14 @@ class GliderGUI(QMainWindow):
                 
             except Exception as e:
                 # Fallback plot
-                ax4.plot(time, ballast_mass, 'c-', linewidth=2, label='Ballast Mass')
+                ax4.plot(time, ballast_fill, 'c-', linewidth=2, label='Ballast Mass')
                 ax4.set_ylabel('Ballast Mass (kg)')
                 ax4.set_xlabel('Time (s)')
                 ax4.grid(True)
                 ax4.set_title('Ballast Mass vs Time')
         else:
             # Fallback plot
-            ax4.plot(time, ballast_mass, 'c-', linewidth=2, label='Ballast Mass')
+            ax4.plot(time, ballast_fill, 'c-', linewidth=2, label='Ballast Mass')
             ax4.set_ylabel('Ballast Mass (kg)')
             ax4.set_xlabel('Time (s)')
             ax4.grid(True)
@@ -1675,8 +1776,8 @@ class GliderGUI(QMainWindow):
             tail_radius = float(self.param_fields['tail_radius'].text())
             ballast_radius = float(self.param_fields['ballast_radius'].text())
             ballast_length = float(self.param_fields['ballast_length'].text())
-            ballast_pos = [float(x) for x in self.param_fields['ballast_position'].text().split(',')]
-            moving_mass_pos = [float(x) for x in self.param_fields['piston_position'].text().split(',')]
+            ballast_pos = [float(x) for x in self.param_fields['ballast_base_position'].text().split(',')]
+            moving_mass_pos = [float(x) for x in self.param_fields['Moving_Mass_base_position'].text().split(',')]
             total_length = nose_length + cyl_length + tail_length
             ballast_x = ballast_pos[0]
             moving_mass_x = moving_mass_pos[0]
@@ -1694,12 +1795,10 @@ class GliderGUI(QMainWindow):
             ax.add_patch(ballast)
             moving_mass = patches.Circle((moving_mass_x, 0), 0.03, color='blue', alpha=0.7)
             ax.add_patch(moving_mass)
-            wing_span = float(self.param_fields.get('wing_span', QLineEdit('1.0')).text())
-            if 'wing_position' in self.param_fields:
-                wing_pos = [float(x) for x in self.param_fields['wing_position'].text().split(',')]
-                wing_x = wing_pos[0]
-            else:
-                wing_x = nose_length + cyl_length * 0.7
+            # Wings (using wing_area from new physics engine)
+            wing_area = float(self.param_fields.get('wing_area', QLineEdit('0.04')).text())
+            wing_span = np.sqrt(wing_area * 4)  # Approximate span from area
+            wing_x = nose_length + cyl_length * 0.7  # Fixed position for wings
             ax.plot([wing_x, wing_x], [-wing_span/2, wing_span/2], color='purple', lw=2)
             ax.set_xlim(-0.1, total_length + 0.2)
             ax.set_ylim(-max(nose_radius, hull_radius, tail_radius, ballast_radius, 0.2)*1.2, max(nose_radius, hull_radius, tail_radius, ballast_radius, 0.2)*1.2)
@@ -1727,15 +1826,15 @@ class GliderGUI(QMainWindow):
             tail_length = float(self.param_fields['tail_length'].text())
             total_length = nose_length + cyl_length + tail_length
             hull_radius = float(self.param_fields['hull_radius'].text())
-            wing_span = float(self.param_fields.get('wing_span', QLineEdit('1.0')).text())
+            wing_area = float(self.param_fields.get('wing_area', QLineEdit('0.04')).text())
             ballast_length = float(self.param_fields['ballast_length'].text())
-            piston_travel = float(self.param_fields['piston_travel'].text())
+            mvm_length = float(self.param_fields.get('MVM_length', QLineEdit('0.5')).text())
             summary = (
                 f"Total Length: {total_length:.2f} m\n"
                 f"Hull Diameter: {2*hull_radius:.2f} m\n"
-                f"Wing Span: {wing_span:.2f} m\n"
+                f"Wing Area: {wing_area:.3f} m²\n"
                 f"Ballast Length: {ballast_length:.2f} m\n"
-                f"Piston Travel: {piston_travel:.2f} m"
+                f"MVM Travel: {mvm_length:.2f} m"
             )
             self.summary_label.setText(summary)
         except Exception:
@@ -1959,10 +2058,10 @@ class GliderGUI(QMainWindow):
         """Sync inputs from the design tab"""
         try:
             # Sync disk positions from design tab
-            if 'piston_position' in self.param_fields and 'ballast_position' in self.param_fields:
-                piston_pos = [float(x.strip()) for x in self.param_fields['piston_position'].text().split(',')][0]
-                ballast_pos = [float(x.strip()) for x in self.param_fields['ballast_position'].text().split(',')][0]
-                self.table_disk_positions.setText(f"{piston_pos}, {ballast_pos}")
+            if 'Moving_Mass_base_position' in self.param_fields and 'ballast_base_position' in self.param_fields:
+                mvm_pos = [float(x.strip()) for x in self.param_fields['Moving_Mass_base_position'].text().split(',')][0]
+                ballast_pos = [float(x.strip()) for x in self.param_fields['ballast_base_position'].text().split(',')][0]
+                self.table_disk_positions.setText(f"{mvm_pos}, {ballast_pos}")
 
             # Sync other parameters
             if 'hull_radius' in self.param_fields:

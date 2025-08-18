@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation as R
 from glider_simulation import run_simulation
 from glider_controls import depth_pitch_control
+import os
 
 # Define glider parameters
 params = {
@@ -10,7 +11,7 @@ params = {
     'nose_length': 0.1,           # m
     'nose_radius': 0.12,          # m
     'cyl_length': 1.2,            # m
-    'hull_radius': 0.,          # m
+    'hull_radius': 0.12,          # m
     'tail_length': 0.1,           # m
     'tail_radius': 0.09,          # m
     'hull_thickness': 0.005,      # m
@@ -18,33 +19,33 @@ params = {
 
     # Ballast system
     'ballast_radius': 0.05,       # m
-    'ballast_length': 0.3,        # m
+    'ballast_length': 0.2,        # m
     'tank_thickness': 0.004,      # m
-    'tank_density': 2700.0,       # kg/m^3
-    'ballast_position': np.array([0.7, 0, 0]),
+    'tank_density': 1200.0,       # kg/m^3
+    'ballast_base_position': np.array([0.6, 0, 0]),
 
     # Mass properties
-    'piston_mass': 3.0,           # kg
-    'piston_position': np.array([0.6, 0, 0]),
-    'piston_travel': 0.3,         # m
-    'actuator_mass': 3.0,         # kg
-    'actuator_position': np.array([0.6, 0, 0]),
-    'fixed_mass': 2,           # kg
-    'fixed_position': np.array([0.7, 0, 0]),
+    'MVM_mass': 5.0,              # kg
+    'Moving_Mass_base_position': np.array([0.5, 0, 0]),
+    'MVM_length': 0.5,            # m
+    'fixed_mass': 3.0,            # kg
+    'fixed_position': np.array([0.4, 0, 0]),
     'I_dry_base': np.diag([2.0, 3.0, 1.5]),
 
     # Hydrodynamics
-    'wing_span': 0.3,             # m
-    'wing_chord': 0.075,           # m
-    'wing_area': 0.0225,            # m^2
-    'wing_position': np.array([0.9, 0, 0]),
-    'glider_length': 1.8,         # m
-    'CD0': 0.1,
-    'CL_alpha': 2 * np.pi,        # ~6.28
-    'CD_alpha': 0.5,
-    'CM0': -0.02,
-    'CM_alpha': -0.1
+    'wing_area': 0.04,            # m^2
+    'glider_length': 1.6,         # m
 }
+
+cfd_candidate_paths = [
+    os.path.join(os.getcwd(), 'cfd_table.csv'),
+    os.path.join(os.getcwd(), 'cfd_table.json'),
+]
+for _p in cfd_candidate_paths:
+    if os.path.isfile(_p):
+        params['cfd_table_path'] = _p
+        print(f"[CFD] Using external CFD table: {_p}")
+        break
 
 # Calculate extra mass needed for neutral buoyancy at 50% ballast fill
 rho_water = 1025.0
@@ -59,7 +60,7 @@ base_dry_mass = (
      + np.pi * params['tail_radius'] * np.sqrt(params['tail_radius']**2 + params['tail_length']**2))
     * params['hull_thickness'] * params['hull_density']
     + 2 * np.pi * params['ballast_radius'] * params['ballast_length'] * params['tank_thickness'] * params['tank_density']
-    + params['fixed_mass'] + params['actuator_mass'] + params['piston_mass']
+    + params['fixed_mass'] + params['MVM_mass']
 )
 total_mass_50 = base_dry_mass + ballast_mass_50
 buoyant_mass = rho_water * V_hull
