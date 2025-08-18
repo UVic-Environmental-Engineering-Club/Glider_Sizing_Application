@@ -1,11 +1,12 @@
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-def depth_pitch_control(t, state, set_depth=20, set_pitch=0):
+def depth_pitch_control(t, state, set_depth=20, set_pitch=0, glider_params=None):
     """
     Control strategy to maintain desired depth and pitch
     set_depth: Target depth in meters (positive down)
     set_pitch: Target pitch angle in degrees
+    glider_params: Optional glider parameters for limit checking
     """
     depth = state[2]
     quat = state[3:7]
@@ -20,27 +21,71 @@ def depth_pitch_control(t, state, set_depth=20, set_pitch=0):
         print(f"Quaternion conversion error: {e}, quat={quat}")
         pitch = 0.0
     
-    # Ballast control with proportional control and limits
+    # Ballast control with proportional control and physics-based limits
     depth_error = set_depth - depth
-    # Scale factor: 0.1 kg/s per meter of depth error, with limits
-    dm_dt = np.clip(depth_error * 0.1, -0.5, 0.5)
     
-    # Pitch control with proportional control and limits
+    # Get current ballast fill level from state
+    current_fill = state[13] if len(state) > 13 else 0.5
+    
+    # Calculate ballast control with limits based on current fill
+    if glider_params:
+        max_ballast_flow = glider_params.get('max_ballast_flow', 1e-3)  # m³/s
+        rho_water = glider_params.get('rho_water', 1025.0)  # kg/m³
+        ballast_radius = glider_params.get('ballast_radius', 0.05)  # m
+        ballast_length = glider_params.get('ballast_length', 0.2)  # m
+        
+        # Convert flow rate to mass rate (kg/s)
+        max_mass_rate = max_ballast_flow * rho_water
+        
+        # Scale factor: 0.1 kg/s per meter of depth error, with physics limits
+        dm_dt = np.clip(depth_error * 0.1, -max_mass_rate, max_mass_rate)
+        
+        # Additional limit: prevent over/under-filling
+        if current_fill <= 0.01 and dm_dt < 0:  # Nearly empty, can't remove more
+            dm_dt = 0.0
+        elif current_fill >= 0.99 and dm_dt > 0:  # Nearly full, can't add more
+            dm_dt = 0.0
+    else:
+        # Fallback to original limits if no params provided
+        dm_dt = np.clip(depth_error * 0.1, -0.5, 0.5)
+    
+    # Pitch control with proportional control and physics-based limits
     pitch_error = np.radians(set_pitch) - pitch
-    # Scale factor: 0.01 m/s per radian of pitch error, with limits
-    dx_dt = np.clip(pitch_error * 0.01, -0.02, 0.02)
+    
+    # Get current MVM offset from state
+    current_mvm_x = state[14] if len(state) > 14 else 0.0
+    
+    # Calculate MVM control with limits based on current position
+    if glider_params:
+        mvm_length = glider_params.get('MVM_length', 0.5)  # m
+        max_mvm_velocity = 0.02  # m/s (reasonable actuator speed)
+        
+        # Scale factor: 0.01 m/s per radian of pitch error, with physics limits
+        dx_dt = np.clip(pitch_error * 0.01, -max_mvm_velocity, max_mvm_velocity)
+        
+        # Additional limit: prevent MVM from exceeding travel limits
+        max_offset = mvm_length / 2
+        if current_mvm_x <= -max_offset + 0.01 and dx_dt < 0:  # At left limit
+            dx_dt = 0.0
+        elif current_mvm_x >= max_offset - 0.01 and dx_dt > 0:  # At right limit
+            dx_dt = 0.0
+    else:
+        # Fallback to original limits if no params provided
+        dx_dt = np.clip(pitch_error * 0.01, -0.02, 0.02)
     
     # Debug output (uncomment for debugging)
     # if t % 1.0 < 0.1:  # Print every ~1 second
     #     print(f"t={t:.1f}: depth={depth:.2f}, target={set_depth}, error={depth_error:.2f}, dm_dt={dm_dt:.3f}")
     #     print(f"  pitch={np.degrees(pitch):.1f}°, target={set_pitch}°, error={np.degrees(pitch_error):.1f}°, dx_dt={dx_dt:.4f}")
+    #     print(f"  ballast_fill={current_fill:.3f}, mvm_x={current_mvm_x:.3f}")
     
     return dm_dt, dx_dt
 
-def trajectory_following_control(t, state, waypoints):
+def trajectory_following_control(t, state, waypoints, glider_params=None):
     """
     Advanced control for following a trajectory
     waypoints: List of (x, y, depth) coordinates
+    glider_params: Optional glider parameters for limit checking
     """
     # Simplified implementation - would include path following logic
     current_pos = state[0:3]
@@ -55,17 +100,122 @@ def trajectory_following_control(t, state, waypoints):
     desired_pitch = np.clip(depth_error * 5, -30, 30)  # Scale factor
     
     # Use depth_pitch control with calculated pitch
-    return depth_pitch_control(t, state, set_depth=target[2], set_pitch=desired_pitch)
+    return depth_pitch_control(t, state, set_depth=target[2], set_pitch=desired_pitch, glider_params=glider_params)
 
-def simple_depth_control(t, state, set_depth=20):
+def simple_depth_control(t, state, set_depth=20, glider_params=None):
     """
     Simple proportional depth control only
     """
     depth = state[2]
     depth_error = set_depth - depth
     
-    # Proportional control with limits
-    dm_dt = np.clip(depth_error * 0.05, -0.3, 0.3)
+    # Get current ballast fill level from state
+    current_fill = state[13] if len(state) > 13 else 0.5
+    
+    # Calculate ballast control with physics-based limits
+    if glider_params:
+        max_ballast_flow = glider_params.get('max_ballast_flow', 1e-3)  # m³/s
+        rho_water = glider_params.get('rho_water', 1025.0)  # kg/m³
+        max_mass_rate = max_ballast_flow * rho_water
+        
+        # Proportional control with physics limits
+        dm_dt = np.clip(depth_error * 0.05, -max_mass_rate, max_mass_rate)
+        
+        # Prevent over/under-filling
+        if current_fill <= 0.01 and dm_dt < 0:
+            dm_dt = 0.0
+        elif current_fill >= 0.99 and dm_dt > 0:
+            dm_dt = 0.0
+    else:
+        # Fallback to original limits
+        dm_dt = np.clip(depth_error * 0.05, -0.3, 0.3)
+    
     dx_dt = 0.0  # No pitch control
     
     return dm_dt, dx_dt
+
+def neutral_buoyancy_control(t, state, target_depth=20, glider_params=None):
+    """
+    Control strategy focused on maintaining neutral buoyancy at target depth
+    """
+    depth = state[2]
+    current_fill = state[13] if len(state) > 13 else 0.5
+    
+    # Calculate depth error
+    depth_error = target_depth - depth
+    
+    # Ballast control: more aggressive for depth control
+    if glider_params:
+        max_ballast_flow = glider_params.get('max_ballast_flow', 1e-3)
+        rho_water = glider_params.get('rho_water', 1025.0)
+        max_mass_rate = max_ballast_flow * rho_water
+        
+        # Proportional control with higher gain for depth
+        dm_dt = np.clip(depth_error * 0.2, -max_mass_rate, max_mass_rate)
+        
+        # Prevent over/under-filling
+        if current_fill <= 0.01 and dm_dt < 0:
+            dm_dt = 0.0
+        elif current_fill >= 0.99 and dm_dt > 0:
+            dm_dt = 0.0
+    else:
+        dm_dt = np.clip(depth_error * 0.2, -0.5, 0.5)
+    
+    # Minimal pitch control to maintain level flight
+    quat = state[3:7]
+    try:
+        euler = R.from_quat(quat).as_euler('xyz')
+        pitch = euler[1]
+        pitch_error = 0 - pitch  # Target level flight (0° pitch)
+        dx_dt = np.clip(pitch_error * 0.005, -0.01, 0.01)  # Gentle pitch correction
+    except:
+        dx_dt = 0.0
+    
+    return dm_dt, dx_dt
+
+def validate_control_outputs(dm_dt, dx_dt, state, glider_params=None):
+    """
+    Validate control outputs against physical constraints
+    Returns: (dm_dt_valid, dx_dt_valid, warnings)
+    """
+    warnings = []
+    
+    # Validate ballast control
+    if glider_params:
+        max_ballast_flow = glider_params.get('max_ballast_flow', 1e-3)
+        rho_water = glider_params.get('rho_water', 1025.0)
+        max_mass_rate = max_ballast_flow * rho_water
+        
+        if abs(dm_dt) > max_mass_rate:
+            warnings.append(f"Ballast rate {dm_dt:.4f} exceeds max {max_mass_rate:.4f} kg/s")
+            dm_dt = np.clip(dm_dt, -max_mass_rate, max_mass_rate)
+    
+    # Validate MVM control
+    if glider_params:
+        max_mvm_velocity = 1  # m/s
+        if abs(dx_dt) > max_mvm_velocity:
+            warnings.append(f"MVM velocity {dx_dt:.4f} exceeds max {max_mvm_velocity:.4f} m/s")
+            dx_dt = np.clip(dx_dt, -max_mvm_velocity, max_mvm_velocity)
+    
+    # Validate against current state
+    if len(state) > 13:
+        current_fill = state[13]
+        if current_fill <= 0.01 and dm_dt < 0:
+            warnings.append("Cannot remove ballast: tank nearly empty")
+            dm_dt = 0.0
+        elif current_fill >= 0.99 and dm_dt > 0:
+            warnings.append("Cannot add ballast: tank nearly full")
+            dm_dt = 0.0
+    
+    if len(state) > 14:
+        current_mvm_x = state[14]
+        if glider_params:
+            max_offset = glider_params.get('MVM_length', 0.5) / 2
+            if current_mvm_x <= -max_offset + 0.01 and dx_dt < 0:
+                warnings.append("Cannot move MVM left: at travel limit")
+                dx_dt = 0.0
+            elif current_mvm_x >= max_offset - 0.01 and dx_dt > 0:
+                warnings.append("Cannot move MVM right: at travel limit")
+                dx_dt = 0.0
+    
+    return dm_dt, dx_dt, warnings

@@ -169,7 +169,7 @@ class GliderGUI(QMainWindow):
         # Control system
         sim_ctrl_layout.addWidget(QLabel("Control System:"))
         self.control_combo = QComboBox()
-        self.control_combo.addItems(["Depth/Pitch Control", "Trajectory Following Control", "Simple Depth Control"])
+        self.control_combo.addItems(["Depth/Pitch Control", "Trajectory Following Control", "Simple Depth Control", "Neutral Buoyancy Control"])
         sim_ctrl_layout.addWidget(self.control_combo)
         sim_layout.addLayout(sim_ctrl_layout)
         
@@ -953,14 +953,17 @@ class GliderGUI(QMainWindow):
         # Select control system
         from glider_controls import depth_pitch_control, trajectory_following_control, simple_depth_control
         if control_choice == "Depth/Pitch Control":
-            control_func = lambda t, s: depth_pitch_control(t, s, desired_depth, desired_pitch)
+            control_func = lambda t, s: depth_pitch_control(t, s, desired_depth, desired_pitch, params)
         elif control_choice == "Trajectory Following Control":
             waypoints = [np.array([0,0,desired_depth]), np.array([10,0,init_depth])]
-            control_func = lambda t, s: trajectory_following_control(t, s, waypoints)
+            control_func = lambda t, s: trajectory_following_control(t, s, waypoints, params)
         elif control_choice == "Simple Depth Control":
-            control_func = lambda t, s: simple_depth_control(t, s, desired_depth)
+            control_func = lambda t, s: simple_depth_control(t, s, desired_depth, params)
+        elif control_choice == "Neutral Buoyancy Control":
+            from glider_controls import neutral_buoyancy_control
+            control_func = lambda t, s: neutral_buoyancy_control(t, s, desired_depth, params)
         else:
-            control_func = lambda t, s: depth_pitch_control(t, s, desired_depth, desired_pitch)
+            control_func = lambda t, s: depth_pitch_control(t, s, desired_depth, desired_pitch, params)
         
         # Setup progress bar and controls
         self.progress_bar.setVisible(True)
@@ -1125,6 +1128,19 @@ class GliderGUI(QMainWindow):
                 f"Ballast Change: {ballast_change:.3f} | MVM Travel: {mvm_travel_used:.3f}m\n"
                 f"Max MVM Velocity: {max_mvm_velocity:.3f}m/s"
             )
+            
+            # Add pump information if available
+            try:
+                # Try to get pump state from the glider object
+                if hasattr(self, 'simulation_worker') and self.simulation_worker:
+                    # This would need to be passed from the simulation worker
+                    pump_info = f"\nPump System: Active during control | Direction: {'Fill' if ballast_change > 0 else 'Empty' if ballast_change < 0 else 'None'}"
+                else:
+                    pump_info = ""
+            except:
+                pump_info = ""
+            
+            actuator_summary += pump_info
             
             self.control_label.setText(control_summary + actuator_summary)
             

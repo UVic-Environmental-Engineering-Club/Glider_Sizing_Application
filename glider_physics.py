@@ -283,6 +283,9 @@ class UnderwaterGlider:
     # The control system is only able to issue two commands to the pump
     # Its can change the pump rate and  and turn it on or off
     # to simplify this we will consider only on or off state
+
+    # ---------------- Ballast integration to controls  ----------------
+    # this is a work around but should be fixed in the future
     
     def step_ballast(self, dt: float):
         """Advance ballast state given pump ON/OFF."""
@@ -293,7 +296,69 @@ class UnderwaterGlider:
         dV_dt = self.pump_direction * self.max_ballast_flow
         d_fill = (dV_dt * dt) / self._tank_volume
 
-        self.fill_fraction = np.clip(self.fill_fraction + d_fill, 0.0, 1.0)
+        # Calculate new fill fraction
+        new_fill = self.fill_fraction + d_fill
+        
+        # Apply proper clipping to prevent negative values
+        if new_fill < 0.0:
+            # If trying to remove more than available, stop at 0 and turn pump off
+            self.fill_fraction = 0.0
+            self.pump_on = False
+            print(f"Warning: Ballast tank empty, stopping pump. Fill: {self.fill_fraction:.3f}")
+        elif new_fill > 1.0:
+            # If trying to add more than capacity, stop at 1 and turn pump off
+            self.fill_fraction = 1.0
+            self.pump_on = False
+            print(f"Warning: Ballast tank full, stopping pump. Fill: {self.fill_fraction:.3f}")
+        else:
+            self.fill_fraction = new_fill
+        
+        # Update pump diagnostics
+        self.pump_power = abs(dV_dt) * 101325  # Power = flow rate * atmospheric pressure (Pa)
+        self.pump_work += self.pump_power * dt  # Cumulative work done
+
+    def set_pump_state(self, pump_on: bool, pump_direction: int = None):
+        """
+        Set pump state and direction.
+        
+        Args:
+            pump_on: Whether pump is active
+            pump_direction: +1 for fill, -1 for empty (only set if pump_on is True)
+        """
+        self.pump_on = pump_on
+        if pump_on and pump_direction is not None:
+            self.pump_direction = np.clip(pump_direction, -1, 1)
+        elif not pump_on:
+            self.pump_direction = 0  # No direction when pump is off
+
+    def set_pump_from_mass_rate(self, dm_dt: float):
+        """
+        Set pump state based on desired mass rate.
+        
+        Args:
+            dm_dt: Desired mass rate in kg/s (positive = add ballast, negative = remove)
+        """
+        if abs(dm_dt) < 1e-6:  # Very small rate, turn pump off
+            self.set_pump_state(False)
+            return
+        
+        # Determine pump direction from mass rate
+        if dm_dt > 0:  # Adding ballast
+            self.set_pump_state(True, +1)
+        else:  # Removing ballast
+            self.set_pump_state(True, -1)
+        
+        # Note: The actual flow rate is limited by max_ballast_flow in step_ballast()
+    
+    def reset_ballast_system(self):
+        """Reset ballast system to safe state if it gets corrupted."""
+        if self.fill_fraction < 0.0 or self.fill_fraction > 1.0:
+            print(f"Warning: Resetting corrupted ballast fill from {self.fill_fraction:.3f} to 0.5")
+            self.fill_fraction = 0.5
+            self.pump_on = False
+            self.pump_direction = 0
+            self.pump_power = 0.0
+            self.pump_work = 0.0
 
 
     # ---------------- Inertia ----------------
@@ -625,7 +690,7 @@ class UnderwaterGlider:
         
         # Ballast fill rate (from pump state)
         ballast_fill_rate = 0.0
-        if self.pump_on:
+        if self.pump_on and self.pump_direction != 0:
             dV_dt = self.pump_direction * self.max_ballast_flow
             ballast_fill_rate = (dV_dt) / self._tank_volume
         
@@ -678,6 +743,17 @@ class UnderwaterGlider:
         return {
             'u': self.u, 'v': self.v, 'w': self.w,
             'p': self.p, 'q': self.q, 'r': self.r
+        }
+    
+    def get_pump_state(self) -> Dict[str, Any]:
+        """Get current pump state and diagnostics."""
+        return {
+            'pump_on': self.pump_on,
+            'pump_direction': self.pump_direction,
+            'pump_power': self.pump_power,
+            'pump_work': self.pump_work,
+            'ballast_fill': self.fill_fraction,
+            'max_flow_rate': self.max_ballast_flow
         }
     
     def get_drag_coefficients(self, aoa_deg: float) -> Dict[str, float]:

@@ -76,7 +76,7 @@ else:
 # Run simulation
 solution = run_simulation(
     params, 
-    control_func=lambda t, s: depth_pitch_control(t, s, 20, 0),
+    control_func=lambda t, s: depth_pitch_control(t, s, 20, 0, params),
     t_end=60,
     dt=1,
     init_depth=10,

@@ -183,24 +183,31 @@ def run_simulation(params, control_func=None, t_end=1, dt=1,
                 dm_dt, dx_dt = control_func(t, y)
                 
                 # Apply control inputs by updating the glider state
-                # For ballast control, we'll modify the fill fraction directly
-                if dm_dt != 0.0:
-                    # Calculate tank volume for ballast control
-                    tank_volume = np.pi * (glider.ballast_radius - glider.tank_thickness)**2 * glider.ballast_length
-                    dV_dt = dm_dt / glider.rho_water
-                    current_fill = y[13]  # ballast fill from state vector
-                    new_fill = np.clip(current_fill + (dV_dt * dt) / tank_volume, 0.0, 1.0)
-                    y[13] = new_fill
+                # For ballast control, use the pump system
+                if abs(dm_dt) > 1e-6:  # Only update if there's a significant rate
+                    # Set pump state based on desired mass rate
+                    glider.set_pump_from_mass_rate(dm_dt)
+                    
+                    # Step the ballast system using the physics engine
+                    glider.step_ballast(dt)
+                    
+                    # Update the state vector with new ballast fill
+                    y[13] = glider.fill_fraction
                 
-                # For MVM control, we'll modify the MVM offset directly
-                if dx_dt != 0.0:
+                # For MVM control, use the physics engine's MVM system
+                if abs(dx_dt) > 1e-6:  # Only update if there's a significant rate
                     current_offset_x = y[14]  # MVM x offset from state vector
                     new_offset_x = np.clip(current_offset_x + dx_dt * dt, -glider.MVM_length/2, glider.MVM_length/2)
                     y[14] = new_offset_x
+                    
+                    # Update the glider's MVM offset to keep it in sync
+                    glider.mvm_offset[0] = new_offset_x
                 
                 # Debug output (uncomment to see control values)
                 if t % 1.0 < 0.1:  # Print every ~1 second
                     print(f"t={t:.1f}: Control applied - dm_dt={dm_dt:.4f}, dx_dt={dx_dt:.4f}")
+                    print(f"  Pump: {'ON' if glider.pump_on else 'OFF'}, Direction: {glider.pump_direction}")
+                    print(f"  Ballast fill: {glider.fill_fraction:.3f}, MVM x: {glider.mvm_offset[0]:.3f}")
                 
             except Exception as e:
                 print(f"Control function error at t={t}: {e}")
