@@ -819,10 +819,14 @@ class GliderGUI(QMainWindow):
             mvm_mass = float(self.param_fields['MVM_mass'].text())
             
             # Volumes
-            V_hull = (1/3) * np.pi * nose_radius**2 * nose_length \
+            V_hull_external = (1/3) * np.pi * nose_radius**2 * nose_length \
                 + np.pi * hull_radius**2 * cyl_length \
                 + (1/3) * np.pi * tail_radius**2 * tail_length
             V_ballast = np.pi * ballast_radius**2 * ballast_length
+            
+            # Subtract ballast tank volume (the tank displaces water and reduces buoyancy)
+            V_hull = V_hull_external - V_ballast
+            
             ballast_mass_50 = rho_water * V_ballast * 0.5
             
             # mass
@@ -847,10 +851,10 @@ class GliderGUI(QMainWindow):
             else:
                 status += " (Negatively buoyant)"
             self.feedback_label.setText(
-                f"Hull Vol: {V_hull:.3f} m³ | Ballast Vol: {V_ballast:.3f} m³\n"
-                f"Dry Mass: {dry_mass:.2f} kg | Ballast@50%: {ballast_mass_50:.2f} kg\n"
-                f"Buoyant Mass: {buoyant_mass:.2f} kg | Total@50%: {total_mass_50:.2f} kg\n"
-                f"{status}"
+                f"External Hull Vol: {V_hull_external:.3f} m³ | Ballast Tank Vol: {V_ballast:.3f} m³\n"
+                f"Buoyancy Vol: {V_hull:.3f} m³ | Ballast@50%: {ballast_mass_50:.2f} kg\n"
+                f"Dry Mass: {dry_mass:.2f} kg | Total@50%: {total_mass_50:.2f} kg\n"
+                f"Buoyant Mass: {buoyant_mass:.2f} kg | {status}"
             )
         except Exception as e:
             self.feedback_label.setText(f"[Feedback Error] {e}")
@@ -1445,6 +1449,9 @@ class GliderGUI(QMainWindow):
         ax4.grid(True)
         ax4.set_title('Velocity Phase Space (Vx vs Vz)')
         
+        # Add quadrant labels and dividing lines
+        self._add_phase_plot_quadrants(ax4, 'Vx', 'Vz', 'Velocity Phase Space (Vx vs Vz)')
+        
         self.sim_fig.tight_layout()
         self.sim_canvas.draw()
     
@@ -1504,11 +1511,14 @@ class GliderGUI(QMainWindow):
         ax4.grid(True)
         ax4.set_title('Force Phase Space (Fx vs Fz)')
         
+        # Add quadrant labels and dividing lines
+        self._add_phase_plot_quadrants(ax4, 'Fx', 'Fz', 'Force Phase Space (Fx vs Fz)')
+        
         self.sim_fig.tight_layout()
         self.sim_canvas.draw()
     
     def plot_energy_analysis(self, solution):
-        """Energy analysis plots"""
+        """Energy analysis plots with power consumption for battery sizing"""
         self.sim_fig.clear()
         
         # Calculate energies
@@ -1529,50 +1539,120 @@ class GliderGUI(QMainWindow):
         # Total energy
         TE = PE + KE
         
-        # Energy plots
-        ax1 = self.sim_fig.add_subplot(221)
+        # Calculate power consumption components
+        dt = np.diff(solution.t)
+        
+        # 1. Mechanical power (rate of energy change)
+        energy_change = np.diff(TE)
+        mechanical_power = energy_change / dt
+        
+        # 2. Control system power (actuator power)
+        # Ballast pump power (approximate)
+        ballast_fill = solution.y[13, :]  # Ballast fill level (0-1)
+        ballast_flow_rate = np.gradient(ballast_fill, solution.t)
+        # Assume pump efficiency and pressure head
+        pump_power = np.abs(ballast_flow_rate) * 1000  # W, approximate
+        
+        # Moving mass actuator power
+        mvm_offset_x = solution.y[14, :]
+        mvm_velocity = np.gradient(mvm_offset_x, solution.t)
+        mvm_power = np.abs(mvm_velocity) * 50  # W, approximate
+        
+        # 3. Electronics power (constant baseline)
+        electronics_power = np.ones_like(solution.t) * 5.0  # 5W baseline for sensors, control, etc.
+        
+        # 4. Total power consumption
+        total_power = np.zeros_like(solution.t)
+        total_power[1:] = np.abs(mechanical_power) + pump_power[1:] + mvm_power[1:] + electronics_power[1:]
+        total_power[0] = total_power[1]  # Set first point
+        
+        # 5. Cumulative energy consumption
+        cumulative_energy = np.cumsum(total_power) * np.mean(np.diff(solution.t))
+        
+        # Create 2x3 subplot layout
+        # Row 1: Energy analysis
+        ax1 = self.sim_fig.add_subplot(2, 3, 1)
         ax1.plot(solution.t, PE, 'b-', label='Potential Energy')
         ax1.plot(solution.t, KE, 'r-', label='Kinetic Energy')
         ax1.plot(solution.t, TE, 'k-', label='Total Energy')
         ax1.set_ylabel('Energy (J)')
         ax1.grid(True)
-        ax1.legend()
+        ax1.legend(fontsize=8)
         ax1.set_title('Energy vs Time')
         
-        # Energy conservation (should be relatively constant)
-        ax2 = self.sim_fig.add_subplot(222)
-        energy_change = np.diff(TE)
+        # Energy conservation
+        ax2 = self.sim_fig.add_subplot(2, 3, 2)
         ax2.plot(solution.t[1:], energy_change, 'g-')
         ax2.axhline(y=0, color='k', linestyle='--', alpha=0.5)
         ax2.set_ylabel('Energy Change (J)')
         ax2.grid(True)
         ax2.set_title('Energy Conservation (ΔE)')
         
-        # Power (rate of energy change)
-        ax3 = self.sim_fig.add_subplot(223)
-        dt = np.diff(solution.t)
-        power = energy_change / dt
-        ax3.plot(solution.t[1:], power, 'm-')
+        # Mechanical power
+        ax3 = self.sim_fig.add_subplot(2, 3, 3)
+        ax3.plot(solution.t[1:], mechanical_power, 'm-', label='Mechanical Power')
         ax3.set_ylabel('Power (W)')
-        ax3.set_xlabel('Time (s)')
         ax3.grid(True)
-        ax3.set_title('Power vs Time')
+        ax3.legend(fontsize=8)
+        ax3.set_title('Mechanical Power')
         
-        # Energy efficiency (work done vs energy input)
-        ax4 = self.sim_fig.add_subplot(224)
-        # Calculate work done by control forces
-        Fx = mass * np.gradient(vx, solution.t)
-        Fz = mass * np.gradient(vz, solution.t)
-        work_x = np.cumsum(Fx * vx) * np.mean(np.diff(solution.t))
-        work_z = np.cumsum(Fz * vz) * np.mean(np.diff(solution.t))
-        total_work = work_x + work_z
-        
-        efficiency = np.abs(total_work) / (TE + 1e-6)  # Avoid division by zero
-        ax4.plot(solution.t, efficiency, 'c-')
-        ax4.set_ylabel('Efficiency')
+        # Row 2: Power consumption analysis for battery sizing
+        # Total power consumption
+        ax4 = self.sim_fig.add_subplot(2, 3, 4)
+        ax4.plot(solution.t, total_power, 'r-', linewidth=2, label='Total Power')
+        ax4.plot(solution.t, pump_power, 'b-', alpha=0.7, label='Ballast Pump')
+        ax4.plot(solution.t, mvm_power, 'g-', alpha=0.7, label='MVM Actuator')
+        ax4.plot(solution.t, electronics_power, 'k-', alpha=0.7, label='Electronics')
+        ax4.set_ylabel('Power (W)')
         ax4.set_xlabel('Time (s)')
         ax4.grid(True)
-        ax4.set_title('Control Efficiency')
+        ax4.legend(fontsize=8)
+        ax4.set_title('Power Consumption Breakdown')
+        
+        # Cumulative energy consumption
+        ax5 = self.sim_fig.add_subplot(2, 3, 5)
+        ax5.plot(solution.t, cumulative_energy, 'purple', linewidth=2)
+        ax5.set_ylabel('Cumulative Energy (J)')
+        ax5.set_xlabel('Time (s)')
+        ax5.grid(True)
+        ax5.set_title('Total Energy Consumed')
+        
+        # Battery sizing summary
+        ax6 = self.sim_fig.add_subplot(2, 3, 6)
+        ax6.axis('off')
+        
+        # Calculate battery sizing metrics
+        max_power = np.max(total_power)
+        avg_power = np.mean(total_power)
+        total_energy_joules = cumulative_energy[-1]
+        total_energy_wh = total_energy_joules / 3600  # Convert J to Wh
+        
+        # Estimate battery capacity needed (with 20% safety margin)
+        safety_margin = 1.2
+        battery_capacity_wh = total_energy_wh * safety_margin
+        
+        # Convert to common battery units
+        battery_capacity_ah_12v = battery_capacity_wh / 12  # Ah at 12V
+        battery_capacity_ah_24v = battery_capacity_wh / 24  # Ah at 24V
+        
+        # Display battery sizing information
+        battery_info = f"""BATTERY SIZING ANALYSIS
+            
+        Peak Power: {max_power:.1f} W
+        Average Power: {avg_power:.1f} W
+        Total Energy: {total_energy_wh:.1f} Wh
+
+        BATTERY REQUIREMENTS:
+        Capacity: {battery_capacity_wh:.1f} Wh
+        12V System: {battery_capacity_ah_12v:.1f} Ah
+        24V System: {battery_capacity_ah_24v:.1f} Ah
+
+        Note: Includes 20% safety margin
+        for mission planning"""
+            
+        ax6.text(0.05, 0.95, battery_info, transform=ax6.transAxes, 
+                fontsize=9, verticalalignment='top', fontfamily='monospace',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='lightblue', alpha=0.8))
         
         self.sim_fig.tight_layout()
         self.sim_canvas.draw()
@@ -1730,6 +1810,9 @@ class GliderGUI(QMainWindow):
         ax5.grid(True)
         ax5.set_title("Vx vs Vz")
         
+        # Add quadrant labels and dividing lines
+        self._add_phase_plot_quadrants(ax5, 'Vx', 'Vz', 'Vx vs Vz')
+        
         ax6 = self.sim_fig.add_subplot(3, 3, 6)
         # 3D trajectory projection (X vs Z)
         ax6.plot(solution.y[0, :], solution.y[2, :], 'b-')
@@ -1770,13 +1853,39 @@ class GliderGUI(QMainWindow):
         ax8.set_title("Energy")
         
         ax9 = self.sim_fig.add_subplot(3, 3, 9)
-        # Control effort
-        control_effort = np.cumsum(np.abs(Fx) + np.abs(Fz)) * np.mean(np.diff(solution.t))
-        ax9.plot(solution.t, control_effort, 'g-')
-        ax9.set_ylabel('Control Effort (N·s)')
+        # Power consumption summary
+        # Calculate power components
+        dt = np.diff(solution.t)
+        energy_change = np.diff(TE)
+        mechanical_power = energy_change / dt
+        
+        # Control system power
+        ballast_fill = solution.y[13, :] if solution.y.shape[0] > 13 else np.zeros_like(solution.t)
+        ballast_flow_rate = np.gradient(ballast_fill, solution.t)
+        pump_power = np.abs(ballast_flow_rate) * 1000  # W, approximate
+        
+        mvm_offset_x = solution.y[14, :] if solution.y.shape[0] > 14 else np.zeros_like(solution.t)
+        mvm_velocity = np.gradient(mvm_offset_x, solution.t)
+        mvm_power = np.abs(mvm_velocity) * 50  # W, approximate
+        
+        electronics_power = np.ones_like(solution.t) * 5.0  # 5W baseline
+        
+        total_power = np.zeros_like(solution.t)
+        total_power[1:] = np.abs(mechanical_power) + pump_power[1:] + mvm_power[1:] + electronics_power[1:]
+        total_power[0] = total_power[1]
+        
+        ax9.plot(solution.t, total_power, 'r-', linewidth=2, label='Total Power')
+        ax9.set_ylabel('Power (W)')
         ax9.set_xlabel('Time (s)')
         ax9.grid(True)
-        ax9.set_title("Control Effort")
+        ax9.set_title("Power Consumption")
+        
+        # Add power summary text
+        max_power = np.max(total_power)
+        avg_power = np.mean(total_power)
+        ax9.text(0.02, 0.98, f'Peak: {max_power:.1f}W\nAvg: {avg_power:.1f}W', 
+                transform=ax9.transAxes, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
         
         self.sim_fig.tight_layout()
         self.sim_canvas.draw()
@@ -2094,3 +2203,38 @@ class GliderGUI(QMainWindow):
         except Exception as e:
             from PyQt5.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Sync Error", str(e))
+
+    def _add_phase_plot_quadrants(self, ax, x_label, y_label, title):
+        """Add quadrant labels and dividing lines to a phase plot"""
+        # Get current axis limits
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+        
+        # Add quadrant dividing lines
+        ax.axhline(y=0, color='k', linestyle='-', alpha=0.5, linewidth=1.2)
+        ax.axvline(x=0, color='k', linestyle='-', alpha=0.5, linewidth=1.2)
+        
+        # Position labels in the outer corners of each quadrant
+        # Top right quadrant - position in top right corner
+        ax.text(xlim[1] * 0.85, ylim[1] * 0.85, 
+                f'Forward + Up\n(+{x_label}, +{y_label})', 
+                ha='center', va='center', fontsize=9, 
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='lightgreen', alpha=0.7))
+        
+        # Top left quadrant - position in top left corner
+        ax.text(xlim[0] * 0.85, ylim[1] * 0.85,
+                f'Backward + Up\n(-{x_label}, +{y_label})',
+                ha='center', va='center', fontsize=9,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='lightblue', alpha=0.7))
+        
+        # Bottom left quadrant - position in bottom left corner
+        ax.text(xlim[0] * 0.85, ylim[0] * 0.85,
+                f'Backward + Down\n(-{x_label}, -{y_label})',
+                ha='center', va='center', fontsize=9,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='lightcoral', alpha=0.7))
+        
+        # Bottom right quadrant - position in bottom right corner
+        ax.text(xlim[1] * 0.85, ylim[0] * 0.85,
+                f'Forward + Down\n(+{x_label}, -{y_label})',
+                ha='center', va='center', fontsize=9,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow', alpha=0.7))

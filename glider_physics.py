@@ -429,9 +429,14 @@ class UnderwaterGlider:
         V_tail = (1.0/3.0) * self._pi * self.tail_radius**2 * self.tail_length
         tail_cg_x = self.nose_length + self.cyl_length + (2.0/3.0) * self.tail_length
 
-        V_total = V_nose + V_cyl + V_tail
-        # center of buoyancy x-coordinate (in body frame)
-        x_cb = (V_nose * nose_cg_x + V_cyl * cyl_cg_x + V_tail * tail_cg_x) / max(V_total, 1e-12)
+        V_hull_external = V_nose + V_cyl + V_tail
+        
+        # Subtract ballast tank volume (the tank displaces water and reduces buoyancy)
+        V_ballast_tank = self._pi * self.ballast_radius**2 * self.ballast_length
+        V_total = V_hull_external - V_ballast_tank
+        
+        # center of buoyancy x-coordinate (in body frame) - use external hull for CB calculation
+        x_cb = (V_nose * nose_cg_x + V_cyl * cyl_cg_x + V_tail * tail_cg_x) / max(V_hull_external, 1e-12)
         self.cb = np.array([x_cb, 0.0, 0.0])
         
         # Store volume for later use
@@ -456,14 +461,14 @@ class UnderwaterGlider:
 
         #Weight (acts at CG) in inertial downwards -> convert to body
         W = self.mass * self.g
-        F_weight_inertial = np.array([0.0, 0.0, -W])  # N (z-down in inertial frame)
+        F_weight_inertial = np.array([0.0, 0.0, W])  # N (z-down in inertial frame)
         
         F_weight_body = R_ib @ F_weight_inertial
 
         # Buoyancy: 
         # assume full immersion of hull (static forces at semi submerged state arent needed to be modeled))
         self._estimate_hull_volume_and_cb()  # Updates self.V_hull and self.cb
-        F_buoy_inertial = np.array([0.0, 0.0, rho * self.V_hull * self.g])  # upward in inertial (+z up)
+        F_buoy_inertial = np.array([0.0, 0.0, -rho * self.V_hull * self.g])  # upward in inertial (+z up)
         # convert to body
         F_buoy_body = R_ib @ F_buoy_inertial
 
@@ -533,6 +538,60 @@ class UnderwaterGlider:
         self.drag_coeffs = coeffs
         self.vel_body = vel_body
         self.omega_body = omega_body
+
+    #method for printing all in inertial frame forces and moments
+
+    def debug_forces(self):
+        """Debug output showing all forces and their directions"""
+        print("\n=== FORCE DEBUG OUTPUT ===")
+        print(f"Mass: {self.mass:.3f} kg")
+        print(f"Gravity: {self.g:.3f} m/s²")
+        print(f"Hull Volume: {self.V_hull:.6f} m³")
+        print(f"Water Density: {self.rho_water:.1f} kg/m³")
+        
+        # Weight force
+        W = self.mass * self.g
+        print(f"\nWEIGHT FORCE:")
+        print(f"  Magnitude: {W:.3f} N")
+        print(f"  Inertial direction: [0, 0, -{W:.3f}] (z-down)")
+        print(f"  Body frame: [{self.F_weight_body[0]:.3f}, {self.F_weight_body[1]:.3f}, {self.F_weight_body[2]:.3f}]")
+        
+        # Buoyancy force
+        B = self.rho_water * self.V_hull * self.g
+        print(f"\nBUOYANCY FORCE:")
+        print(f"  Magnitude: {B:.3f} N")
+        print(f"  Inertial direction: [0, 0, {B:.3f}] (z-up)")
+        print(f"  Body frame: [{self.F_buoy_body[0]:.3f}, {self.F_buoy_body[1]:.3f}, {self.F_buoy_body[2]:.3f}]")
+        
+        # Net vertical force
+        net_vertical = B - W
+        print(f"\nNET VERTICAL FORCE:")
+        print(f"  Buoyancy - Weight = {B:.3f} - {W:.3f} = {net_vertical:.3f} N")
+        print(f"  {'POSITIVE (should float up)' if net_vertical > 0 else 'NEGATIVE (should sink down)'}")
+        
+        # Total force
+        print(f"\nTOTAL FORCE (Body Frame):")
+        print(f"  F_total = [{self.F_body[0]:.3f}, {self.F_body[1]:.3f}, {self.F_body[2]:.3f}] N")
+        print(f"  Magnitude: {np.linalg.norm(self.F_body):.3f} N")
+        
+        # Current attitude
+        euler = R.from_quat(self.attitude).as_euler('xyz', degrees=True)
+        print(f"\nCURRENT ATTITUDE:")
+        print(f"  Roll: {euler[0]:.1f}°")
+        print(f"  Pitch: {euler[1]:.1f}°")
+        print(f"  Yaw: {euler[2]:.1f}°")
+        
+        # CG and CB positions
+        print(f"\nPOSITIONS:")
+        print(f"  CG (body frame): [{self.cg[0]:.3f}, {self.cg[1]:.3f}, {self.cg[2]:.3f}] m")
+        print(f"  CB (body frame): [{self.cb[0]:.3f}, {self.cb[1]:.3f}, {self.cb[2]:.3f}] m")
+        print(f"  CB-CG offset: [{self.cb[0]-self.cg[0]:.3f}, {self.cb[1]-self.cg[1]:.3f}, {self.cb[2]-self.cg[2]:.3f}] m")
+        
+        # Current velocity
+        print(f"\nCURRENT VELOCITY (Body Frame):")
+        print(f"  [u, v, w] = [{self.u:.3f}, {self.v:.3f}, {self.w:.3f}] m/s")
+        
+        print("=" * 40)
 
     # ---------------- 6-DOF Physics Dynamics ----------------
     def _compute_acceleration(self) -> np.ndarray:
