@@ -80,20 +80,6 @@ class GliderGUI(QMainWindow):
         self.param_panel = QTabWidget()
         self._setup_parameter_tabs()
         param_layout.addWidget(self.param_panel)
-        # --- Metric/Imperial Converter ---
-        converter_group = QGroupBox("Metric/Imperial Converter")
-        converter_layout = QFormLayout()
-        self.metric_input = QLineEdit()
-        self.imperial_input = QLineEdit()
-        self.metric_input.setPlaceholderText("Meters or Kilograms")
-        self.imperial_input.setPlaceholderText("Feet or Pounds")
-        converter_layout.addRow("Metric:", self.metric_input)
-        converter_layout.addRow("Imperial:", self.imperial_input)
-        converter_group.setLayout(converter_layout)
-        param_layout.addWidget(converter_group)
-        # Connect conversion logic
-        self.metric_input.textChanged.connect(self.metric_to_imperial)
-        self.imperial_input.textChanged.connect(self.imperial_to_metric)
         scroll.setWidget(param_widget)
         # Make the scroll area a fixed width for better balance
         scroll.setMinimumWidth(350)
@@ -557,7 +543,6 @@ class GliderGUI(QMainWindow):
         self._add_parameter_field(hull_layout, "hull_radius", "Hull Radius (m)", "0.08")
         self._add_parameter_field(hull_layout, "tail_length", "Tail Length (m)", "0.3")
         self._add_parameter_field(hull_layout, "tail_radius", "Tail Radius (m)", "0.04")
-        self._add_parameter_field(hull_layout, "glider_length", "Glider Length (m)", "1.6")
         self._add_parameter_field(hull_layout, "hull_thickness", "Hull Thickness (m)", "0.005")
         self._add_parameter_field(hull_layout, "hull_density", "Hull Density (kg/m³)", "2700")
         hull_group.setLayout(hull_layout)
@@ -591,7 +576,6 @@ class GliderGUI(QMainWindow):
         self._add_parameter_field(mass_group_layout, "MVM_mass", "Moving Mass (kg)", "5.0")
         self._add_parameter_field(mass_group_layout, "Moving_Mass_base_position", "MVM Base Position (x,y,z)", "0.5,0,0")
         self._add_parameter_field(mass_group_layout, "MVM_length", "MVM Travel Length (m)", "0.5")
-        self._add_parameter_field(mass_group_layout, "piston_mass", "Piston Mass (kg)", "0.8")
         self._add_parameter_field(mass_group_layout, "I_dry_base", "Dry Inertia (diag) kg·m²", "2.0,3.0,1.5")
         mass_group.setLayout(mass_group_layout)
         mass_layout.addWidget(mass_group)
@@ -622,7 +606,7 @@ class GliderGUI(QMainWindow):
         hydro_layout.addWidget(added_mass_group)
         
         # CFD Table group
-        cfd_group = QGroupBox("CFD Table (Optional)")
+        cfd_group = QGroupBox("CFD Table")
         cfd_layout = QVBoxLayout()
         
         # Information about the CFD system
@@ -860,7 +844,7 @@ class GliderGUI(QMainWindow):
         except Exception as e:
             self.feedback_label.setText(f"[Feedback Error] {e}")
         
-    def update_cross_section(self):
+    def update_cross_section(self, preview_mode=False):
         try:
             # Get parameters
             nose_length = float(self.param_fields['nose_length'].text())
@@ -883,8 +867,20 @@ class GliderGUI(QMainWindow):
             total_length = nose_length + cyl_length + tail_length
             ballast_x = ballast_pos[0]
             moving_mass_x = moving_mass_pos[0]
-            self.cross_fig.clear()
-            ax = self.cross_fig.add_subplot(111)
+            moving_mass_y = moving_mass_pos[1]
+            
+            # Choose which figure to use based on preview mode
+            if preview_mode:
+                self.cross_preview_fig.clear()
+                ax = self.cross_preview_fig.add_subplot(111)
+                fig = self.cross_preview_fig
+                canvas = self.cross_preview_canvas
+            else:
+                self.cross_fig.clear()
+                ax = self.cross_fig.add_subplot(111)
+                fig = self.cross_fig
+                canvas = self.cross_canvas
+            
             # Draw torpedo-like hull            
             # Main body (cylinder)
                # outer hull
@@ -917,16 +913,16 @@ class GliderGUI(QMainWindow):
             ax.add_patch(ballast)
 
             # Moving mass (orange)
-            MvM_base = lines.Line2D([moving_mass_x, moving_mass_x + moving_mass_length], [0, 0], color='orange', lw=2, label='Moving Mass Base')
+            MvM_base = lines.Line2D([moving_mass_x, moving_mass_x + moving_mass_length], [moving_mass_y, moving_mass_y], color='orange', lw=2, label='Moving Mass Base')
             ax.add_line(MvM_base)
-            moving_mass = patches.Circle((moving_mass_x + 0.5* moving_mass_length, 0), 0.04, color='orange', alpha=0.8, label='Moving Mass')
+            moving_mass = patches.Circle((moving_mass_x + 0.5* moving_mass_length, moving_mass_y), 0.04, color='orange', alpha=0.8, label='Moving Mass')
             ax.add_patch(moving_mass)
 
 
             # CG/CB markers
             cb_x = total_length * 0.5
             ax.plot([cg_x], [0], marker='X', color='green', markersize=10, label='CG')
-            ax.plot([cb_x], [0], marker='P', color='yellow', markersize=10, label='CB')
+            ax.plot([cb_x], [0], marker='P', color='cyan', markersize=10, label='CB')
             # Wings
             wing_area = float(self.param_fields.get('wing_area', QLineEdit('0.04')).text())
             wing_span = np.sqrt(wing_area * 4)  # Approximate span from area
@@ -942,15 +938,26 @@ class GliderGUI(QMainWindow):
             ax.set_aspect('equal')
             ax.set_title('Glider Side View (Cross Section)')
             ax.axis('on')
-            ax.legend(loc='upper right', fontsize=9)
-            self.cross_fig.tight_layout()
-            self.cross_canvas.draw()
+            
+            # Only show legend and labels in full mode, not preview mode
+            if not preview_mode:
+                ax.legend(loc='upper right', fontsize=9)
+            
+            fig.tight_layout()
+            canvas.draw()
         except Exception as e:
-            self.cross_fig.clear()
-            ax = self.cross_fig.add_subplot(111)
-            ax.text(0.5, 0.5, f"[Cross Section Error]\n{e}", ha='center', va='center')
-            ax.axis('off')
-            self.cross_canvas.draw()
+            if preview_mode:
+                self.cross_preview_fig.clear()
+                ax = self.cross_preview_fig.add_subplot(111)
+                ax.text(0.5, 0.5, f"[Cross Section Error]\n{e}", ha='center', va='center')
+                ax.axis('off')
+                self.cross_preview_canvas.draw()
+            else:
+                self.cross_fig.clear()
+                ax = self.cross_fig.add_subplot(111)
+                ax.text(0.5, 0.5, f"[Cross Section Error]\n{e}", ha='center', va='center')
+                ax.axis('off')
+                self.cross_canvas.draw()
     
     def run_simulation(self):
         # Prevent multiple simulations from running simultaneously
@@ -1506,7 +1513,7 @@ class GliderGUI(QMainWindow):
         ax1.set_title('Acceleration Components')
         
         # Force analysis (F = ma, approximate)
-        mass = 50.0  # Approximate glider mass
+        mass = self.params.get('mass', 50.0)
         Fx = mass * ax
         Fy = mass * ay
         Fz = mass * az
@@ -1553,7 +1560,7 @@ class GliderGUI(QMainWindow):
         
         # Calculate energies
         g = 9.81  # gravity
-        mass = 50.0  # approximate mass
+        mass = self.params.get('mass', 50.0)
         
         # Potential energy (PE = mgh, where h is depth)
         depth = solution.y[2, :]
@@ -1921,112 +1928,9 @@ class GliderGUI(QMainWindow):
         self.sim_canvas.draw()
 
     def update_cross_preview(self):
-        try:
-            # Use same logic as update_cross_section but smaller and no labels
-            nose_length = float(self.param_fields['nose_length'].text())
-            nose_radius = float(self.param_fields['nose_radius'].text())
-            cyl_length = float(self.param_fields['cyl_length'].text())
-            hull_radius = float(self.param_fields['hull_radius'].text())
-            tail_length = float(self.param_fields['tail_length'].text())
-            tail_radius = float(self.param_fields['tail_radius'].text())
-            ballast_radius = float(self.param_fields['ballast_radius'].text())
-            ballast_length = float(self.param_fields['ballast_length'].text())
-            ballast_pos = [float(x) for x in self.param_fields['ballast_base_position'].text().split(',')]
-            moving_mass_pos = [float(x) for x in self.param_fields['Moving_Mass_base_position'].text().split(',')]
-            moving_mass_length = float(self.param_fields['MVM_length'].text())
-            hull_thickness = float(self.param_fields['hull_thickness'].text())
-            
-            # Get parameters for CG calculation
-            params = {
-                'nose_length': nose_length,
-                'nose_radius': nose_radius,
-                'cyl_length': cyl_length,
-                'hull_radius': hull_radius,
-                'tail_length': tail_length,
-                'tail_radius': tail_radius,
-                'hull_thickness': hull_thickness,
-                'hull_density': float(self.param_fields['hull_density'].text()),
-                'tank_thickness': float(self.param_fields['tank_thickness'].text()),
-                'tank_density': float(self.param_fields['tank_density'].text()),
-                'ballast_radius': ballast_radius,
-                'ballast_length': ballast_length,
-                'ballast_base_position': self.param_fields['ballast_base_position'].text(),
-                'Moving_Mass_base_position': self.param_fields['Moving_Mass_base_position'].text(),
-                'fixed_mass': float(self.param_fields['fixed_mass'].text()),
-                'MVM_mass': float(self.param_fields['MVM_mass'].text()),
-                'fixed_position': self.param_fields['fixed_position'].text(),
-                'current_fill': float(self.param_fields.get('current_fill', QLineEdit('0.0')).text()),
-                'rho_water': 1025.0  # Default water density
-            }
-            cg_x = self.calculate_direct_physics_cg()
-            total_length = nose_length + cyl_length + tail_length
-            ballast_x = ballast_pos[0]
-            moving_mass_x = moving_mass_pos[0]
-            self.cross_preview_fig.clear()
-            ax = self.cross_preview_fig.add_subplot(111)
-            
-            # Draw torpedo-like hull            
-            # Main body (cylinder)
-            # outer hull
-            cyl_x = nose_length
-            body = lines.Line2D([cyl_x, cyl_x + cyl_length], [hull_radius, hull_radius], color='black', lw=1.2, label='Hull Body')
-            ax.add_line(body)
-            body = lines.Line2D([cyl_x, cyl_x + cyl_length], [-hull_radius, -hull_radius], color='black', lw=1.2)
-            ax.add_line(body)
-            body = lines.Line2D([cyl_x, cyl_x], [hull_radius, -hull_radius], color='black', lw=2)
-            ax.add_line(body)
-            body = lines.Line2D([cyl_x + cyl_length, cyl_x + cyl_length], [hull_radius, -hull_radius], color='black', lw=2)
-            ax.add_line(body)
-            # inner hull
-            body = lines.Line2D([cyl_x, cyl_x + cyl_length], [hull_radius - hull_thickness, hull_radius - hull_thickness], color='black', lw=1.2, ls ='--')
-            ax.add_line(body)
-            body = lines.Line2D([cyl_x, cyl_x + cyl_length], [-hull_radius + hull_thickness, -hull_radius + hull_thickness], color='black', lw=1.2, ls ='--')
-            ax.add_line(body)
-
-            # Nose (triangle, left)
-            nose = patches.Polygon([[0, 0], [nose_length, nose_radius], [nose_length, -nose_radius]], closed=True, edgecolor='black', facecolor='red', linewidth=1.2,label='Nose')
-            ax.add_patch(nose)
-
-            # Tail (Triangle, right)
-            tail_x = nose_length + cyl_length
-            tail = patches.Polygon([[tail_x, tail_radius], [tail_x, -tail_radius], [tail_x + tail_length, 0]], closed=True, edgecolor='black', facecolor='blue', linewidth=1.2, label='Tail')
-            ax.add_patch(tail)
-
-            # Ballast tank (red)
-            ballast = patches.Rectangle((ballast_x, -ballast_radius), ballast_length, 2*ballast_radius, color='red', alpha=0.5, lw=2, label='Ballast Tank')
-            ax.add_patch(ballast)
-
-            # Moving mass (orange)
-            MvM_base = lines.Line2D([moving_mass_x, moving_mass_x + moving_mass_length], [0, 0], color='orange', lw=2, label='Moving Mass Base')
-            ax.add_line(MvM_base)
-            moving_mass = patches.Circle((moving_mass_x + 0.5* moving_mass_length, 0), 0.04, color='orange', alpha=0.8, label='Moving Mass')
-            ax.add_patch(moving_mass)
-            # CG/CB markers
-            cb_x = total_length * 0.5
-            ax.plot([cg_x], [0], marker='X', color='green', markersize=10, label='CG')
-            ax.plot([cb_x], [0], marker='P', color='yellow', markersize=10, label='CB')
-            
-            # Wings
-            wing_area = float(self.param_fields.get('wing_area', QLineEdit('0.04')).text())
-            wing_span = np.sqrt(wing_area * 4)  # Approximate span from area
-            wing_x = nose_length + cyl_length * 0.7  # Fixed position for wings
-            wing_1 = patches.Rectangle((wing_x, hull_radius), wing_span/4, wing_span, color='purple', alpha=0.8, label='Wing')
-            ax.add_patch(wing_1)
-            wing_2 = patches.Rectangle((wing_x, -hull_radius), wing_span/4, -wing_span, color='purple', alpha=0.8 )
-            ax.add_patch(wing_2)
-            ax.set_xlim(-0.1, total_length + 0.2)
-            ax.set_ylim(-max(nose_radius, hull_radius, tail_radius, ballast_radius, wing_span, 0.2)*1.5, max(nose_radius, hull_radius, tail_radius, ballast_radius, wing_span, 0.2)*1.5)
-            ax.set_aspect('equal')
-            ax.set_title('Glider Side View (Cross Section)')
-            ax.axis('on')
-            ax.legend(loc='upper right', fontsize=9)
-            self.cross_preview_fig.tight_layout()
-            self.cross_preview_canvas.draw()
-        except Exception:
-            self.cross_preview_fig.clear()
-            ax = self.cross_preview_fig.add_subplot(111)
-            ax.axis('off')
-            self.cross_preview_canvas.draw()
+        """Update the cross section preview by calling the main cross section method"""
+        self.update_cross_section(preview_mode=True)
+        
         # Add summary metrics for quick reference
         try:
             nose_length = float(self.param_fields['nose_length'].text())
@@ -2048,43 +1952,7 @@ class GliderGUI(QMainWindow):
         except Exception:
             self.summary_label.setText("")
     
-    def metric_to_imperial(self):
-        try:
-            val = float(self.metric_input.text())
-            # Try to guess if it's a length or mass (simple heuristic)
-            if val < 10:  # likely meters
-                feet = val * 3.28084
-                self.imperial_input.blockSignals(True)
-                self.imperial_input.setText(f"{feet:.3f}")
-                self.imperial_input.blockSignals(False)
-            else:  # likely kilograms
-                pounds = val * 2.20462
-                self.imperial_input.blockSignals(True)
-                self.imperial_input.setText(f"{pounds:.3f}")
-                self.imperial_input.blockSignals(False)
-        except Exception:
-            self.imperial_input.blockSignals(True)
-            self.imperial_input.setText("")
-            self.imperial_input.blockSignals(False)
-    def imperial_to_metric(self):
-        try:
-            val = float(self.imperial_input.text())
-            # Try to guess if it's a length or mass (simple heuristic)
-            if val < 33:  # likely feet
-                meters = val / 3.28084
-                self.metric_input.blockSignals(True)
-                self.metric_input.setText(f"{meters:.3f}")
-                self.metric_input.blockSignals(False)
-            else:  # likely pounds
-                kg = val / 2.20462
-                self.metric_input.blockSignals(True)
-                self.metric_input.setText(f"{kg:.3f}")
-                self.metric_input.blockSignals(False)
-        except Exception:
-            self.metric_input.blockSignals(True)
-            self.metric_input.setText("")
-            self.metric_input.blockSignals(False)
-
+    
     def update_depth_table(self):
         """Update the depth calculation table"""
         try:
