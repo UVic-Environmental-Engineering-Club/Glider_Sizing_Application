@@ -14,6 +14,7 @@ from glider_simulation import run_simulation
 import json
 import os
 import matplotlib.patches as patches
+import matplotlib.lines as lines
 from scipy.spatial.transform import Rotation as R
 from unit_converter import UnitConverterWidget
 
@@ -111,7 +112,7 @@ class GliderGUI(QMainWindow):
         right_panel.addWidget(QLabel("Design Feedback:"))
         right_panel.addWidget(self.feedback_label)
         # Render at the bottom
-        cross_preview = Figure(figsize=(3.5, 1.5))
+        cross_preview = Figure(figsize=(6, 2.5))
         self.cross_preview_canvas = FigureCanvas(cross_preview)
         self.cross_preview_fig = cross_preview
         right_panel.addWidget(self.cross_preview_canvas, stretch=1)
@@ -872,46 +873,75 @@ class GliderGUI(QMainWindow):
             ballast_length = float(self.param_fields['ballast_length'].text())
             ballast_pos = [float(x) for x in self.param_fields['ballast_base_position'].text().split(',')]
             moving_mass_pos = [float(x) for x in self.param_fields['Moving_Mass_base_position'].text().split(',')]
+            moving_mass_length = float(self.param_fields['MVM_length'].text())
+            hull_thickness = float(self.param_fields['hull_thickness'].text())
+            
+            # Get parameters for CG calculation
+            # find a better way to do this
+            # this is a hack to get the CG position
+            cg_x = self.calculate_direct_physics_cg()
             total_length = nose_length + cyl_length + tail_length
             ballast_x = ballast_pos[0]
             moving_mass_x = moving_mass_pos[0]
             self.cross_fig.clear()
             ax = self.cross_fig.add_subplot(111)
-            # Draw torpedo-like hull: ellipse for nose, rectangle for body, ellipse for tail
-            # NOTE: fix the end cones
+            # Draw torpedo-like hull            
             # Main body (cylinder)
+               # outer hull
             cyl_x = nose_length
-            body = patches.Rectangle((cyl_x, -hull_radius), cyl_length, 2*hull_radius, color='#bbb', alpha=0.9, lw=2)
-            ax.add_patch(body)
-            # Nose (ellipse, left)
-            nose = patches.Ellipse((nose_length/2, 0), nose_length, 2*nose_radius, color='#888', alpha=0.8, lw=2)
+            body = lines.Line2D([cyl_x, cyl_x + cyl_length], [hull_radius, hull_radius], color='black', lw=1.2, label='Hull Body')
+            ax.add_line(body)
+            body = lines.Line2D([cyl_x, cyl_x + cyl_length], [-hull_radius, -hull_radius], color='black', lw=1.2)
+            ax.add_line(body)
+            body = lines.Line2D([cyl_x, cyl_x], [hull_radius, -hull_radius], color='black', lw=2)
+            ax.add_line(body)
+            body = lines.Line2D([cyl_x + cyl_length, cyl_x + cyl_length], [hull_radius, -hull_radius], color='black', lw=2)
+            ax.add_line(body)
+                # inner hull
+            body = lines.Line2D([cyl_x, cyl_x + cyl_length], [hull_radius - hull_thickness, hull_radius - hull_thickness], color='black', lw=1.2, ls ='--')
+            ax.add_line(body)
+            body = lines.Line2D([cyl_x, cyl_x + cyl_length], [-hull_radius + hull_thickness, -hull_radius + hull_thickness], color='black', lw=1.2, ls ='--')
+            ax.add_line(body)
+
+            # Nose (triangle, left)
+            nose = patches.Polygon([[0, 0], [nose_length, nose_radius], [nose_length, -nose_radius]], closed=True, edgecolor='black', facecolor='red', linewidth=1.2,label='Nose')
             ax.add_patch(nose)
-            # Tail (ellipse, right)
-            tail_x = nose_length + cyl_length + tail_length/2
-            tail = patches.Ellipse((tail_x, 0), tail_length, 2*tail_radius, color='#888', alpha=0.8, lw=2)
+
+            # Tail (Triangle, right)
+            tail_x = nose_length + cyl_length
+            tail = patches.Polygon([[tail_x, tail_radius], [tail_x, -tail_radius], [tail_x + tail_length, 0]], closed=True, edgecolor='black', facecolor='blue', linewidth=1.2, label='Tail')
             ax.add_patch(tail)
+
             # Ballast tank (red)
             ballast = patches.Rectangle((ballast_x, -ballast_radius), ballast_length, 2*ballast_radius, color='red', alpha=0.5, lw=2, label='Ballast Tank')
             ax.add_patch(ballast)
-            # Moving mass (blue)
-            moving_mass = patches.Circle((moving_mass_x, 0), 0.04, color='blue', alpha=0.8, label='Moving Mass')
+
+            # Moving mass (orange)
+            MvM_base = lines.Line2D([moving_mass_x, moving_mass_x + moving_mass_length], [0, 0], color='orange', lw=2, label='Moving Mass Base')
+            ax.add_line(MvM_base)
+            moving_mass = patches.Circle((moving_mass_x + 0.5* moving_mass_length, 0), 0.04, color='orange', alpha=0.8, label='Moving Mass')
             ax.add_patch(moving_mass)
-            # CG/CB markers (optional, for clarity)
-            cg_x = nose_length + cyl_length * 0.5
-            cb_x = cg_x + 0.05 * total_length
-            ax.plot([cg_x], [0], marker='o', color='green', markersize=10, label='CG')
-            ax.plot([cb_x], [0], marker='s', color='cyan', markersize=10, label='CB')
-            # Wings (using wing_area from new physics engine)
+
+
+            # CG/CB markers
+            cb_x = total_length * 0.5
+            ax.plot([cg_x], [0], marker='X', color='green', markersize=10, label='CG')
+            ax.plot([cb_x], [0], marker='P', color='yellow', markersize=10, label='CB')
+            # Wings
             wing_area = float(self.param_fields.get('wing_area', QLineEdit('0.04')).text())
             wing_span = np.sqrt(wing_area * 4)  # Approximate span from area
             wing_x = nose_length + cyl_length * 0.7  # Fixed position for wings
-            ax.plot([wing_x, wing_x], [-wing_span/2, wing_span/2], color='purple', lw=2)
+            wing_1 = patches.Rectangle((wing_x, hull_radius), wing_span/4, wing_span, color='purple', alpha=0.8, label='Wing')
+            ax.add_patch(wing_1)
+            wing_2 = patches.Rectangle((wing_x, -hull_radius), wing_span/4, -wing_span, color='purple', alpha=0.8 )
+            ax.add_patch(wing_2)
+            
             # Labels and legend
             ax.set_xlim(-0.1, total_length + 0.2)
-            ax.set_ylim(-max(nose_radius, hull_radius, tail_radius, ballast_radius, 0.2)*1.5, max(nose_radius, hull_radius, tail_radius, ballast_radius, 0.2)*1.5)
+            ax.set_ylim(-max(nose_radius, hull_radius, tail_radius, ballast_radius, wing_span, 0.2)*1.5, max(nose_radius, hull_radius, tail_radius, ballast_radius, wing_span, 0.2)*1.5)
             ax.set_aspect('equal')
             ax.set_title('Glider Side View (Cross Section)')
-            ax.axis('off')
+            ax.axis('on')
             ax.legend(loc='upper right', fontsize=9)
             self.cross_fig.tight_layout()
             self.cross_canvas.draw()
@@ -1903,40 +1933,93 @@ class GliderGUI(QMainWindow):
             ballast_length = float(self.param_fields['ballast_length'].text())
             ballast_pos = [float(x) for x in self.param_fields['ballast_base_position'].text().split(',')]
             moving_mass_pos = [float(x) for x in self.param_fields['Moving_Mass_base_position'].text().split(',')]
+            moving_mass_length = float(self.param_fields['MVM_length'].text())
+            hull_thickness = float(self.param_fields['hull_thickness'].text())
+            
+            # Get parameters for CG calculation
+            params = {
+                'nose_length': nose_length,
+                'nose_radius': nose_radius,
+                'cyl_length': cyl_length,
+                'hull_radius': hull_radius,
+                'tail_length': tail_length,
+                'tail_radius': tail_radius,
+                'hull_thickness': hull_thickness,
+                'hull_density': float(self.param_fields['hull_density'].text()),
+                'tank_thickness': float(self.param_fields['tank_thickness'].text()),
+                'tank_density': float(self.param_fields['tank_density'].text()),
+                'ballast_radius': ballast_radius,
+                'ballast_length': ballast_length,
+                'ballast_base_position': self.param_fields['ballast_base_position'].text(),
+                'Moving_Mass_base_position': self.param_fields['Moving_Mass_base_position'].text(),
+                'fixed_mass': float(self.param_fields['fixed_mass'].text()),
+                'MVM_mass': float(self.param_fields['MVM_mass'].text()),
+                'fixed_position': self.param_fields['fixed_position'].text(),
+                'current_fill': float(self.param_fields.get('current_fill', QLineEdit('0.0')).text()),
+                'rho_water': 1025.0  # Default water density
+            }
+            cg_x = self.calculate_direct_physics_cg()
             total_length = nose_length + cyl_length + tail_length
             ballast_x = ballast_pos[0]
             moving_mass_x = moving_mass_pos[0]
             self.cross_preview_fig.clear()
             ax = self.cross_preview_fig.add_subplot(111)
+            
+            # Draw torpedo-like hull            
+            # Main body (cylinder)
+            # outer hull
             cyl_x = nose_length
-            body = patches.Rectangle((cyl_x, -hull_radius), cyl_length, 2*hull_radius, color='#bbb', alpha=0.9, lw=1)
-            ax.add_patch(body)
-            nose = patches.Ellipse((nose_length/2, 0), nose_length, 2*nose_radius, color='#888', alpha=0.8, lw=1)
+            body = lines.Line2D([cyl_x, cyl_x + cyl_length], [hull_radius, hull_radius], color='black', lw=1.2, label='Hull Body')
+            ax.add_line(body)
+            body = lines.Line2D([cyl_x, cyl_x + cyl_length], [-hull_radius, -hull_radius], color='black', lw=1.2)
+            ax.add_line(body)
+            body = lines.Line2D([cyl_x, cyl_x], [hull_radius, -hull_radius], color='black', lw=2)
+            ax.add_line(body)
+            body = lines.Line2D([cyl_x + cyl_length, cyl_x + cyl_length], [hull_radius, -hull_radius], color='black', lw=2)
+            ax.add_line(body)
+            # inner hull
+            body = lines.Line2D([cyl_x, cyl_x + cyl_length], [hull_radius - hull_thickness, hull_radius - hull_thickness], color='black', lw=1.2, ls ='--')
+            ax.add_line(body)
+            body = lines.Line2D([cyl_x, cyl_x + cyl_length], [-hull_radius + hull_thickness, -hull_radius + hull_thickness], color='black', lw=1.2, ls ='--')
+            ax.add_line(body)
+
+            # Nose (triangle, left)
+            nose = patches.Polygon([[0, 0], [nose_length, nose_radius], [nose_length, -nose_radius]], closed=True, edgecolor='black', facecolor='red', linewidth=1.2,label='Nose')
             ax.add_patch(nose)
-            tail_x = nose_length + cyl_length + tail_length/2
-            tail = patches.Ellipse((tail_x, 0), tail_length, 2*tail_radius, color='#888', alpha=0.8, lw=1)
+
+            # Tail (Triangle, right)
+            tail_x = nose_length + cyl_length
+            tail = patches.Polygon([[tail_x, tail_radius], [tail_x, -tail_radius], [tail_x + tail_length, 0]], closed=True, edgecolor='black', facecolor='blue', linewidth=1.2, label='Tail')
             ax.add_patch(tail)
-            ballast = patches.Rectangle((ballast_x, -ballast_radius), ballast_length, 2*ballast_radius, color='red', alpha=0.4, lw=1)
+
+            # Ballast tank (red)
+            ballast = patches.Rectangle((ballast_x, -ballast_radius), ballast_length, 2*ballast_radius, color='red', alpha=0.5, lw=2, label='Ballast Tank')
             ax.add_patch(ballast)
-            moving_mass = patches.Circle((moving_mass_x, 0), 0.03, color='blue', alpha=0.7)
+
+            # Moving mass (orange)
+            MvM_base = lines.Line2D([moving_mass_x, moving_mass_x + moving_mass_length], [0, 0], color='orange', lw=2, label='Moving Mass Base')
+            ax.add_line(MvM_base)
+            moving_mass = patches.Circle((moving_mass_x + 0.5* moving_mass_length, 0), 0.04, color='orange', alpha=0.8, label='Moving Mass')
             ax.add_patch(moving_mass)
-            # Wings (using wing_area from new physics engine)
+            # CG/CB markers
+            cb_x = total_length * 0.5
+            ax.plot([cg_x], [0], marker='X', color='green', markersize=10, label='CG')
+            ax.plot([cb_x], [0], marker='P', color='yellow', markersize=10, label='CB')
+            
+            # Wings
             wing_area = float(self.param_fields.get('wing_area', QLineEdit('0.04')).text())
             wing_span = np.sqrt(wing_area * 4)  # Approximate span from area
             wing_x = nose_length + cyl_length * 0.7  # Fixed position for wings
-            ax.plot([wing_x, wing_x], [-wing_span/2, wing_span/2], color='purple', lw=2)
+            wing_1 = patches.Rectangle((wing_x, hull_radius), wing_span/4, wing_span, color='purple', alpha=0.8, label='Wing')
+            ax.add_patch(wing_1)
+            wing_2 = patches.Rectangle((wing_x, -hull_radius), wing_span/4, -wing_span, color='purple', alpha=0.8 )
+            ax.add_patch(wing_2)
             ax.set_xlim(-0.1, total_length + 0.2)
-            ax.set_ylim(-max(nose_radius, hull_radius, tail_radius, ballast_radius, 0.2)*1.2, max(nose_radius, hull_radius, tail_radius, ballast_radius, 0.2)*1.2)
+            ax.set_ylim(-max(nose_radius, hull_radius, tail_radius, ballast_radius, wing_span, 0.2)*1.5, max(nose_radius, hull_radius, tail_radius, ballast_radius, wing_span, 0.2)*1.5)
             ax.set_aspect('equal')
-            ax.axis('off')
-            # Add legend
-            handles = []
-            handles.append(patches.Patch(color='#bbb', label='Hull'))
-            handles.append(patches.Patch(color='#888', label='Nose/Tail'))
-            handles.append(patches.Patch(color='red', alpha=0.4, label='Ballast Tank'))
-            handles.append(patches.Patch(color='blue', alpha=0.7, label='Moving Mass'))
-            handles.append(patches.Patch(color='purple', label='Wings'))
-            ax.legend(handles=handles, loc='upper right', fontsize=8, frameon=True)
+            ax.set_title('Glider Side View (Cross Section)')
+            ax.axis('on')
+            ax.legend(loc='upper right', fontsize=9)
             self.cross_preview_fig.tight_layout()
             self.cross_preview_canvas.draw()
         except Exception:
@@ -2238,3 +2321,86 @@ class GliderGUI(QMainWindow):
                 f'Forward + Down\n(+{x_label}, -{y_label})',
                 ha='center', va='center', fontsize=9,
                 bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow', alpha=0.7))
+
+
+    # i dont love recalculating the CG just for the GUI updates
+    # but it's the only way to get the CG position for the GUI
+    # I think we  should look at a way to create a physics object 
+    # just for the GUI updates.
+    def calculate_direct_physics_cg(self):
+        """Calculate CG using direct physics calculations from the physics module"""
+        try:
+            # Extract parameters directly from self.param_fields
+            nose_length = float(self.param_fields['nose_length'].text())
+            nose_radius = float(self.param_fields['nose_radius'].text())
+            cyl_length = float(self.param_fields['cyl_length'].text())
+            hull_radius = float(self.param_fields['hull_radius'].text())
+            tail_length = float(self.param_fields['tail_length'].text())
+            tail_radius = float(self.param_fields['tail_radius'].text())
+            hull_thickness = float(self.param_fields['hull_thickness'].text())
+            hull_density = float(self.param_fields['hull_density'].text())
+            tank_thickness = float(self.param_fields['tank_thickness'].text())
+            tank_density = float(self.param_fields['tank_density'].text())
+            ballast_radius = float(self.param_fields['ballast_radius'].text())
+            ballast_length = float(self.param_fields['ballast_length'].text())
+            fixed_mass = float(self.param_fields['fixed_mass'].text())
+            MVM_mass = float(self.param_fields['MVM_mass'].text())
+            rho_water = 1025.0  # Default water density
+            current_fill = float(self.param_fields.get('current_fill', QLineEdit('0.0')).text())
+            
+            # Get ballast and MVM positions
+            ballast_pos = [float(x) for x in self.param_fields['ballast_base_position'].text().split(',')]
+            moving_mass_pos = [float(x) for x in self.param_fields['Moving_Mass_base_position'].text().split(',')]
+            fixed_pos = [float(x) for x in self.param_fields['fixed_position'].text().split(',')]
+            
+            # Calculate hull masses (thin-shell approximations)
+            import math
+            pi = math.pi
+            
+            # Hull component masses
+            nose_area = pi * nose_radius * math.sqrt(nose_radius**2 + nose_length**2)
+            cyl_area = 2.0 * pi * hull_radius * cyl_length
+            tail_area = pi * tail_radius * math.sqrt(tail_radius**2 + tail_length**2)
+            
+            m_nose = nose_area * hull_thickness * hull_density
+            m_cyl = cyl_area * hull_thickness * hull_density
+            m_tail = tail_area * hull_thickness * hull_density
+            m_hull = m_nose + m_cyl + m_tail
+            
+            # Ballast tank shell mass
+            r_inner = ballast_radius - tank_thickness
+            shell_area = 2.0 * pi * ballast_radius * ballast_length
+            m_tank_shell = shell_area * tank_thickness * tank_density
+            
+            # Dynamic ballast water mass
+            tank_volume = pi * (r_inner**2) * ballast_length
+            V_ballast = max(0.0, min(1.0, current_fill)) * tank_volume
+            m_ballast_water = rho_water * V_ballast
+            
+            # Total mass
+            mass = m_hull + m_tank_shell + m_ballast_water + fixed_mass + MVM_mass
+            
+            # Component CG positions (x-coordinates)
+            nose_cg_x = 0.75 * nose_length
+            cyl_cg_x = nose_length + 0.5 * cyl_length
+            tail_cg_x = nose_length + cyl_length + 0.25 * tail_length
+            
+            # Hull CG (weighted average of components)
+            hull_cg_x = (nose_cg_x * m_nose + cyl_cg_x * m_cyl + tail_cg_x * m_tail) / max(m_hull, 1e-9)
+            
+            # Overall CG calculation
+            numerator = (hull_cg_x * m_hull +
+                        ballast_pos[0] * (m_tank_shell + m_ballast_water) +
+                        fixed_pos[0] * fixed_mass +
+                        moving_mass_pos[0] * MVM_mass)
+            
+            cg_x = numerator / mass
+            return cg_x
+            
+        except Exception as e:
+            print(f"Error calculating direct physics CG: {e}")
+            # Fallback to simple geometric center
+            nose_length = float(self.param_fields['nose_length'].text())
+            cyl_length = float(self.param_fields['cyl_length'].text())
+            tail_length = float(self.param_fields['tail_length'].text())
+            return (nose_length + cyl_length + tail_length) / 2
