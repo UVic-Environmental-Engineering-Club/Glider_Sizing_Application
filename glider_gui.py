@@ -11,6 +11,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from glider_simulation import run_simulation
+from glider_stability import GliderStability
 import json
 import os
 import matplotlib.patches as patches
@@ -73,6 +74,33 @@ class GliderGUI(QMainWindow):
         design_layout = QHBoxLayout(design_tab)
         # Left: Parameter panel in a scroll area for neatness
         from PyQt5.QtWidgets import QScrollArea, QGroupBox, QFormLayout
+        
+        # Add save/load controls above the parameter panel
+        save_load_group = QGroupBox("Save/Load Design")
+        save_load_layout = QHBoxLayout()
+        
+        # Save button
+        self.save_btn = QPushButton("💾 Save Parameters")
+        self.save_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 8px; }")
+        self.save_btn.clicked.connect(self.save_parameters)
+        save_load_layout.addWidget(self.save_btn)
+        
+        # Load button
+        self.load_btn = QPushButton("📂 Load Parameters")
+        self.load_btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-weight: bold; padding: 8px; }")
+        self.load_btn.clicked.connect(self.load_parameters)
+        save_load_layout.addWidget(self.load_btn)
+        
+        # Add some spacing
+        save_load_layout.addStretch()
+        
+        # Status label for save/load operations
+        self.save_load_status = QLabel("Ready to save/load parameters")
+        self.save_load_status.setStyleSheet("color: #666; font-style: italic;")
+        save_load_layout.addWidget(self.save_load_status)
+        
+        save_load_group.setLayout(save_load_layout)
+        
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         param_widget = QWidget()
@@ -84,7 +112,13 @@ class GliderGUI(QMainWindow):
         # Make the scroll area a fixed width for better balance
         scroll.setMinimumWidth(350)
         scroll.setMaximumWidth(800)
-        design_layout.addWidget(scroll, stretch=0)
+        
+        # Create left panel with save/load controls and parameter panel
+        left_panel = QVBoxLayout()
+        left_panel.addWidget(save_load_group)
+        left_panel.addWidget(scroll)
+        
+        design_layout.addLayout(left_panel, stretch=0)
         # Right: Feedback and summary stacked above render
         right_panel = QVBoxLayout()
         # Summary on top
@@ -115,6 +149,53 @@ class GliderGUI(QMainWindow):
         self.cross_canvas = FigureCanvas(self.cross_fig)
         cross_layout.addWidget(self.cross_canvas)
         self.tabs.addTab(cross_tab, "Cross Section")
+        # --- Stability Tab ---
+        stability_tab = QWidget()
+        stability_layout = QVBoxLayout(stability_tab)
+        
+        # Stability controls
+        stability_ctrl_layout = QHBoxLayout()
+        stability_ctrl_layout.addWidget(QLabel("Ballast Fill Ratio:"))
+        self.ballast_fill_spin = QDoubleSpinBox()
+        self.ballast_fill_spin.setDecimals(2)
+        self.ballast_fill_spin.setRange(0.0, 1.0)
+        self.ballast_fill_spin.setValue(0.5)
+        self.ballast_fill_spin.valueChanged.connect(self.update_stability_analysis)
+        stability_ctrl_layout.addWidget(self.ballast_fill_spin)
+        
+        stability_ctrl_layout.addWidget(QLabel("Analysis Type:"))
+        self.stability_plot_combo = QComboBox()
+        self.stability_plot_combo.addItems([
+            "Stability Diagram", 
+            "Righting Arm Curve", 
+            "Ballast Stability Curve"
+        ])
+        self.stability_plot_combo.currentTextChanged.connect(self.update_stability_plot)
+        stability_ctrl_layout.addWidget(self.stability_plot_combo)
+        
+        # Add manual update button
+        self.update_stability_btn = QPushButton("Update Analysis")
+        self.update_stability_btn.clicked.connect(self.update_stability_analysis)
+        stability_ctrl_layout.addWidget(self.update_stability_btn)
+        
+        stability_layout.addLayout(stability_ctrl_layout)
+        
+        # Stability summary display
+        stability_summary_layout = QHBoxLayout()
+        stability_summary_layout.addWidget(QLabel("Stability Summary:"))
+        self.stability_summary_label = QLabel("Click 'Update Analysis' to calculate stability")
+        self.stability_summary_label.setStyleSheet("background-color: #f0f8ff; padding: 10px; border: 1px solid #87ceeb;")
+        self.stability_summary_label.setWordWrap(True)
+        self.stability_summary_label.setMinimumHeight(100)
+        stability_summary_layout.addWidget(self.stability_summary_label)
+        stability_layout.addLayout(stability_summary_layout)
+        
+        # Stability plots
+        self.stability_fig = Figure(figsize=(8, 6))
+        self.stability_canvas = FigureCanvas(self.stability_fig)
+        stability_layout.addWidget(self.stability_canvas)
+        
+        self.tabs.addTab(stability_tab, "Stability")
         # --- Simulation Tab ---
         sim_tab = QWidget()
         sim_layout = QVBoxLayout(sim_tab)
@@ -517,6 +598,7 @@ class GliderGUI(QMainWindow):
         self.update_feedback()
         self.update_cross_section()
         self.update_cross_preview()
+        self.update_stability_analysis()
         
         # Initialize simulation worker
         self.simulation_worker = None
@@ -737,6 +819,7 @@ class GliderGUI(QMainWindow):
         self.update_feedback()
         self.update_cross_section()
         self.update_cross_preview()
+        self.update_stability_analysis()
         
     def save_params(self):
         params = {name: field.text() for name, field in self.param_fields.items()}
@@ -745,6 +828,172 @@ class GliderGUI(QMainWindow):
                 json.dump(params, f)
         except Exception as e:
             print(f"[Save Error] {e}")
+    
+    def save_parameters(self):
+        """Save current glider parameters to a JSON file"""
+        try:
+            # Get current parameters
+            params = self.get_parameters()
+            if params is None:
+                QMessageBox.warning(self, "Save Warning", "Some parameters have invalid values. Please fix them before saving.")
+                return
+            
+            # Convert parameters to JSON-safe format
+            json_safe_params = self._make_json_safe(params)
+            
+            # Open file dialog for saving
+            from PyQt5.QtWidgets import QFileDialog
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Glider Parameters",
+                "glider_design.json",
+                "JSON Files (*.json);;All Files (*)"
+            )
+            
+            if file_path:
+                # Add metadata
+                save_data = {
+                    "metadata": {
+                        "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "version": "1.0",
+                        "description": "Underwater Glider Design Parameters"
+                    },
+                    "parameters": json_safe_params
+                }
+                
+                # Save to file
+                with open(file_path, 'w') as f:
+                    json.dump(save_data, f, indent=2)
+                
+                # Update status
+                self.save_load_status.setText(f"✅ Saved to: {os.path.basename(file_path)}")
+                self.save_load_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
+                
+                # Show success message
+                QMessageBox.information(
+                    self,
+                    "Save Successful",
+                    f"Parameters saved successfully to:\n{file_path}"
+                )
+                
+        except Exception as e:
+            # Show error message
+            QMessageBox.critical(
+                self,
+                "Save Error",
+                f"Failed to save parameters:\n{str(e)}"
+            )
+            self.save_load_status.setText("❌ Save failed")
+            self.save_load_status.setStyleSheet("color: #f44336; font-weight: bold;")
+    
+    def _make_json_safe(self, params):
+        """Convert parameters to JSON-safe format"""
+        json_safe = {}
+        for name, value in params.items():
+            if isinstance(value, np.ndarray):
+                # Convert numpy arrays to lists
+                json_safe[name] = value.tolist()
+            elif isinstance(value, np.matrix):
+                # Convert numpy matrices to lists
+                json_safe[name] = value.tolist()
+            elif hasattr(value, 'tolist'):
+                # Handle other numpy-like objects
+                json_safe[name] = value.tolist()
+            else:
+                # Regular Python types (int, float, str, bool)
+                json_safe[name] = value
+        return json_safe
+    
+    def load_parameters(self):
+        """Load glider parameters from a JSON file"""
+        try:
+            # Open file dialog for loading
+            from PyQt5.QtWidgets import QFileDialog
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Load Glider Parameters",
+                "",
+                "JSON Files (*.json);;All Files (*)"
+            )
+            
+            if file_path:
+                # Load from file
+                with open(file_path, 'r') as f:
+                    load_data = json.load(f)
+                
+                # Extract parameters
+                if "parameters" in load_data:
+                    params = load_data["parameters"]
+                else:
+                    # Handle old format files
+                    params = load_data
+                
+                # Validate parameters
+                required_params = [
+                    'nose_length', 'nose_radius', 'cyl_length', 'hull_radius',
+                    'tail_length', 'tail_radius', 'ballast_radius', 'ballast_length',
+                    'fixed_mass', 'MVM_mass', 'current_fill'
+                ]
+                
+                missing_params = [p for p in required_params if p not in params]
+                if missing_params:
+                    raise ValueError(f"Missing required parameters: {missing_params}")
+                
+                # Apply parameters to GUI
+                self.apply_loaded_parameters(params)
+                
+                # Update status
+                self.save_load_status.setText(f"✅ Loaded from: {os.path.basename(file_path)}")
+                self.save_load_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
+                
+                # Show success message
+                QMessageBox.information(
+                    self,
+                    "Load Successful",
+                    f"Parameters loaded successfully from:\n{file_path}"
+                )
+                
+                # Refresh analysis
+                self.on_apply_changes()
+                
+        except Exception as e:
+            # Show error message
+            QMessageBox.critical(
+                self,
+                "Load Error",
+                f"Failed to load parameters:\n{str(e)}"
+            )
+            self.save_load_status.setText("❌ Load failed")
+            self.save_load_status.setStyleSheet("color: #f44336; font-weight: bold;")
+    
+    def apply_loaded_parameters(self, params):
+        """Apply loaded parameters to the GUI controls"""
+        try:
+            # Apply to input fields using the correct field names
+            for name, value in params.items():
+                if name in self.param_fields:
+                    if isinstance(value, list):
+                        # Handle vector parameters (converted from numpy arrays)
+                        if name.endswith('_position') or name == 'I_dry_base':
+                            # Convert list back to comma-separated string
+                            self.param_fields[name].setText(','.join(map(str, value)))
+                        else:
+                            # Handle other list parameters
+                            self.param_fields[name].setText(str(value))
+                    else:
+                        # Handle scalar parameters
+                        self.param_fields[name].setText(str(value))
+            
+            # Apply to stability controls if they exist
+            if 'current_fill' in params and hasattr(self, 'ballast_fill_spin'):
+                self.ballast_fill_spin.setValue(float(params['current_fill']))
+                
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Parameter Application Warning",
+                f"Some parameters could not be applied:\n{str(e)}"
+            )
             
     def load_params(self):
         if os.path.exists(self.PARAMS_FILE):
@@ -958,6 +1207,77 @@ class GliderGUI(QMainWindow):
                 ax.text(0.5, 0.5, f"[Cross Section Error]\n{e}", ha='center', va='center')
                 ax.axis('off')
                 self.cross_canvas.draw()
+    
+    def update_stability_analysis(self):
+        """Update stability analysis when parameters change"""
+        try:
+            # Get current parameters
+            params = self.get_parameters()
+            if params is None:
+                return
+            
+            # Update ballast fill ratio in parameters
+            params['current_fill'] = float(self.ballast_fill_spin.value())
+            
+            # Create stability analyzer
+            analyzer = GliderStability(params)
+            result = analyzer.analyze_stability()
+            
+            # Update summary display
+            summary = analyzer.get_stability_summary()
+            self.stability_summary_label.setText(summary)
+            
+            # Update plot
+            self.update_stability_plot()
+            
+        except Exception as e:
+            self.stability_summary_label.setText(f"Stability Analysis Error: {e}")
+            self.stability_fig.clear()
+            ax = self.stability_fig.add_subplot(111)
+            ax.text(0.5, 0.5, f"[Stability Error]\n{e}", ha='center', va='center')
+            ax.axis('off')
+            self.stability_canvas.draw()
+    
+    def update_stability_plot(self):
+        """Update the stability plot based on selected type"""
+        try:
+            # Get current parameters
+            params = self.get_parameters()
+            if params is None:
+                return
+            
+            # Update ballast fill ratio in parameters
+            params['current_fill'] = float(self.ballast_fill_spin.value())
+            
+            # Create stability analyzer
+            analyzer = GliderStability(params)
+            
+            # Clear figure
+            self.stability_fig.clear()
+            ax = self.stability_fig.add_subplot(111)
+            
+            # Plot based on selection
+            plot_type = self.stability_plot_combo.currentText()
+            
+            if plot_type == "Stability Diagram":
+                analyzer.plot_stability_diagram(ax)
+            elif plot_type == "Righting Arm Curve":
+                analyzer.plot_righting_arm_curve(ax)
+            elif plot_type == "Ballast Stability Curve":
+                analyzer.plot_ballast_stability_curve(ax)
+            else:
+                # Default to stability diagram
+                analyzer.plot_stability_diagram(ax)
+            
+            self.stability_fig.tight_layout()
+            self.stability_canvas.draw()
+            
+        except Exception as e:
+            self.stability_fig.clear()
+            ax = self.stability_fig.add_subplot(111)
+            ax.text(0.5, 0.5, f"[Stability Plot Error]\n{e}", ha='center', va='center')
+            ax.axis('off')
+            self.stability_canvas.draw()
     
     def run_simulation(self):
         # Prevent multiple simulations from running simultaneously
