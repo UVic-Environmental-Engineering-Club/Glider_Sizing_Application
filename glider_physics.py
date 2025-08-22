@@ -133,7 +133,20 @@ class UnderwaterGlider:
         self.MVM_length = float(self.params.get('MVM_length', 0.5))
         
         # Base positions for dynamic components
+        # These positions define the geometric center of each component in 3D space
+        # 
+        # Moving Mass (MVM): Base position is the geometric center of the MVM when at neutral offset
+        # - X: Distance from nose tip to center of MVM
+        # - Y: Lateral offset from centerline (0 = centered)
+        # - Z: Vertical offset from centerline (0 = centered)
+        # The MVM can move from this base position by the offset amount
         self.mvm_base_position = self._vec(self.params.get('Moving_Mass_base_position', np.array([0.5, 0.0, 0.0])))
+        
+        # Ballast Tank: Base position is the geometric center of the ballast tank
+        # - X: Distance from nose tip to center of ballast tank
+        # - Y: Lateral offset from centerline (0 = centered)
+        # - Z: Vertical offset from centerline (0 = centered)
+        # The ballast tank itself doesn't move, only the water level changes
         self.ballast_base_position = self._vec(self.params.get('ballast_base_position', np.array([0.6, 0.0, 0.0])))
         
         # Current offsets from base positions
@@ -218,6 +231,18 @@ class UnderwaterGlider:
 
     # ---------------- mass & CG ----------------
     def _calculate_mass_properties(self):
+        """
+        Calculate mass properties and 3D center of gravity for the underwater glider.
+        
+        Coordinate System:
+        - Origin (0,0,0): Nose tip of the glider
+        - X-axis: Forward direction (positive = forward from nose)
+        - Y-axis: Lateral direction (positive = right when looking forward)
+        - Z-axis: Vertical direction (positive = up when level)
+        
+        All positions are calculated relative to the nose tip and can be offset
+        for asymmetric geometries using custom CG offset parameters.
+        """
         # --- Hull (thin-shell approximations) ---
         nose_area = self._pi * self.nose_radius * np.sqrt(self.nose_radius**2 + self.nose_length**2)
         cyl_area  = 2.0 * self._pi * self.hull_radius * self.cyl_length
@@ -244,21 +269,29 @@ class UnderwaterGlider:
 
         mass = m_hull + m_tank_shell + m_ballast_water + m_fixed + m_MVM
 
-        # --- Positions ---
-        nose_cg_x = 0.75 * self.nose_length
-        cyl_cg_x  = self.nose_length + 0.5 * self.cyl_length
-        tail_cg_x = self.nose_length + self.cyl_length + 0.25 * self.tail_length
-        nose_cg = np.array([nose_cg_x, 0.0, 0.0])
-        cyl_cg  = np.array([cyl_cg_x,  0.0, 0.0])
-        tail_cg = np.array([tail_cg_x, 0.0, 0.0])
+        # --- 3D Positions for all components ---
+        # Calculate actual 3D CG positions for hull components based on geometry
+        nose_cg = self._calculate_hull_component_cg('nose')
+        cyl_cg  = self._calculate_hull_component_cg('cyl')
+        tail_cg = self._calculate_hull_component_cg('tail')
 
+        # Calculate hull CG in 3D space
         hull_cg = (nose_cg * m_nose + cyl_cg * m_cyl + tail_cg * m_tail) / max(m_hull, 1e-9)
 
-        # Use base positions plus current offsets
-        ballast_pos = self.ballast_base_position + np.array([0.0, 0.0, 0.0])  # Ballast doesn't move, just fills
+        # Ballast position
+        ballast_pos = self._calculate_ballast_cg()
+        
+        # Fixed mass position in 3D space
+        # This represents the geometric center of the fixed mass component
+        # - X: Distance from nose tip to center of fixed mass
+        # - Y: Lateral offset from centerline (0 = centered)
+        # - Z: Vertical offset from centerline (0 = centered)
         fixed_pos = self._vec(self.params.get('fixed_position', np.array([0.4, 0.0, 0.0])))
-        mvm_pos = self.mvm_base_position + self.mvm_offset
+        
+        # Moving mass position in 3D space (base + current offset)
+        mvm_pos = self._calculate_mvm_cg()
 
+        # Calculate 3D CG using mass-weighted average of all component positions
         numerator = (hull_cg * m_hull +
                     ballast_pos * (m_tank_shell + m_ballast_water) +
                     fixed_pos * m_fixed +
@@ -277,7 +310,7 @@ class UnderwaterGlider:
         )
 
         self.mass = float(mass)
-        self.cg = cg
+        self.cg = cg 
         self._tank_volume = tank_volume
 
     # The control system is only able to issue two commands to the pump
@@ -769,6 +802,98 @@ class UnderwaterGlider:
         
         return np.concatenate([pos_dot, q_dot, accel_body, alpha_body, [ballast_fill_rate], mvm_offset_rate])
 
+    def _calculate_hull_component_cg(self, component_type: str) -> np.ndarray:
+        """
+        Calculate the 3D CG position of a hull component based on its actual geometry.
+        
+        Args:
+            component_type: 'nose', 'cyl', or 'tail'
+            
+        Returns:
+            np.ndarray: 3D CG position [x, y, z] in body frame (meters)
+        """
+        if component_type == 'nose':
+            # Nose cone: truncated cone with base radius = hull_radius, tip radius = 0
+            # Geometry: Starts at X=0 (nose tip) and extends to X=nose_length
+            # CG of a cone is at 1/4 height from base (3/4 from tip)
+            # - X: 0.75 * nose_length (measured from nose tip)
+            # - Y: 0.0 (assumed centered on centerline, can be offset for asymmetry)
+            # - Z: 0.0 (assumed centered on centerline, can be offset for asymmetry)
+            x = 0.75 * self.nose_length
+            
+            # For a cone, if there's any asymmetry in Y or Z, it would be here
+            # For now, assuming the cone is perfectly symmetric around the X-axis
+            # but this can be extended for actual asymmetric geometries
+            y = 0.0
+            z = 0.0
+            
+            base_cg = np.array([x, y, z])
+            
+        elif component_type == 'cyl':
+            # Cylindrical section: CG is at geometric center
+            # Geometry: Extends from X=nose_length to X=nose_length+cyl_length
+            # - X: nose_length + 0.5*cyl_length (center of cylinder)
+            # - Y: 0.0 (centered on centerline, can be offset for asymmetry)
+            # - Z: 0.0 (centered on centerline, can be offset for asymmetry)
+            x = self.nose_length + 0.5 * self.cyl_length
+            y = 0.0  # Centered on axis of symmetry
+            z = 0.0  # Centered on axis of symmetry
+            
+            base_cg = np.array([x, y, z])
+            
+        elif component_type == 'tail':
+            # Tail cone: truncated cone with base radius = hull_radius, tip radius = tail_radius
+            # Geometry: Extends from X=nose_length+cyl_length to X=glider_length
+            # CG of a truncated cone is approximately 1/4 from the base (3/4 from tip)
+            # - X: nose_length + cyl_length + 0.25*tail_length (measured from nose tip)
+            # - Y: 0.0 (assumed centered on centerline, can be offset for asymmetry)
+            # - Z: 0.0 (assumed centered on centerline, can be offset for asymmetry)
+            x = self.nose_length + self.cyl_length + 0.25 * self.tail_length
+            
+            # For a truncated cone, if there's any asymmetry in Y or Z, it would be here
+            # This can be extended for actual asymmetric geometries
+            y = 0.0
+            z = 0.0
+            
+            base_cg = np.array([x, y, z])
+            
+        else:
+            raise ValueError(f"Unknown component type: {component_type}")
+        
+        # Check if custom CG offsets are specified in parameters
+        custom_key = f'{component_type}_cg_offset'
+        if custom_key in self.params:
+            custom_offset = self._vec(self.params[custom_key])
+        else:
+            custom_offset = np.array([0.0, 0.0, 0.0])
+        
+        # Apply custom offset if specified
+        return base_cg + custom_offset
+    
+    def _calculate_ballast_cg(self) -> np.ndarray:
+        """
+        Calculate the 3D CG position of the ballast system.
+        
+        Returns:
+            np.ndarray: 3D CG position [x, y, z] in body frame (meters)
+        """
+        # Base position from parameters
+        base_pos = self.ballast_base_position
+        
+        # If the ballast tank has any asymmetry or offset from the base position,
+        # it would be calculated here based on actual tank geometry
+        # For now, using the base position directly
+        return base_pos.copy()
+    
+    def _calculate_mvm_cg(self) -> np.ndarray:
+        """
+        Calculate the 3D CG position of the moving mass system.
+        
+        Returns:
+            np.ndarray: 3D CG position [x, y, z] in body frame (meters)
+        """
+        # Base position plus current offset
+        return self.mvm_base_position + self.mvm_offset
 
     #---------------- Getters ----------------
     def get_position_inertial(self) -> np.ndarray:
@@ -869,6 +994,127 @@ class UnderwaterGlider:
             return max_offset - abs(self.mvm_offset[2])
         else:
             raise ValueError("direction must be 'x', 'y', or 'z'")
+    
+    def get_cg_3d(self) -> np.ndarray:
+        """
+        Get the center of gravity in 3D space.
+        
+        Returns:
+            np.ndarray: 3D CG position [x, y, z] in body frame (meters)
+        """
+        return self.cg.copy()
+    
+    def get_cg_components(self) -> Dict[str, np.ndarray]:
+        """
+        Get the CG positions of individual mass components for analysis.
+        
+        Returns:
+            Dict containing CG positions of all mass components:
+            - 'hull': Combined hull CG
+            - 'ballast': Ballast tank CG (shell + water)
+            - 'fixed': Fixed mass CG
+            - 'mvm': Moving mass CG
+        """
+        return {
+            'hull': self._cg_parts['hull_cg'].copy(),
+            'ballast': self._cg_parts['ballast_pos'].copy(),
+            'fixed': self._cg_parts['fixed_pos'].copy(),
+            'mvm': self._cg_parts['Moving_Mass_pos'].copy()
+        }
+    
+    def get_cg_mass_breakdown(self) -> Dict[str, float]:
+        """
+        Get the mass breakdown of all components for analysis.
+        
+        Returns:
+            Dict containing masses of all components:
+            - 'hull': Total hull mass
+            - 'ballast_shell': Ballast tank shell mass
+            - 'ballast_water': Ballast water mass
+            - 'fixed': Fixed mass
+            - 'mvm': Moving mass
+        """
+        return {
+            'hull': self._m_parts['m_hull'],
+            'ballast_shell': self._m_parts['m_tank_shell'],
+            'ballast_water': self._m_parts['m_ballast_water'],
+            'fixed': self._m_parts['m_fixed'],
+            'mvm': self._m_parts['m_MVM']
+        }
+    
+    def get_cg_inertial(self) -> np.ndarray:
+        """
+        Get the center of gravity in inertial frame coordinates.
+        
+        Returns:
+            np.ndarray: 3D CG position [x, y, z] in inertial frame (meters)
+        """
+        # Transform body CG to inertial frame using current position and attitude
+        R_bi = R.from_quat(self.attitude).as_matrix()
+        cg_inertial = self.position_inertial + R_bi @ self.cg
+        return cg_inertial
+    
+    def get_fixed_mass_position(self) -> np.ndarray:
+        """
+        Get the current 3D position of the fixed mass component.
+        
+        Returns:
+            np.ndarray: 3D position [x, y, z] in body frame (meters)
+        """
+        return self._vec(self.params.get('fixed_position', np.array([0.4, 0.0, 0.0])))
+    
+    def get_cg_offset_from_geometric_center(self) -> np.ndarray:
+        """
+        Get the CG offset from the geometric center of the glider.
+        
+        Returns:
+            np.ndarray: 3D offset [dx, dy, dz] from geometric center (meters)
+        """
+        # Geometric center is at the middle of the glider length
+        geometric_center = np.array([self.glider_length / 2, 0.0, 0.0])
+        cg_offset = self.cg - geometric_center
+        return cg_offset
+    
+    def get_cg_stability_info(self) -> Dict[str, Any]:
+        """
+        Get comprehensive CG information for stability analysis.
+        
+        Returns:
+            Dict containing:
+            - 'cg_body': CG in body frame
+            - 'cg_inertial': CG in inertial frame
+            - 'cg_offset': CG offset from geometric center
+            - 'mass': Total mass
+            - 'components': Individual component CGs
+            - 'mass_breakdown': Mass breakdown
+        """
+        return {
+            'cg_body': self.get_cg_3d(),
+            'cg_inertial': self.get_cg_inertial(),
+            'cg_offset': self.get_cg_offset_from_geometric_center(),
+            'mass': self.mass,
+            'components': self.get_cg_components(),
+            'mass_breakdown': self.get_cg_mass_breakdown()
+        }
+    
+    def get_hull_component_cg_offset(self, component_type: str) -> np.ndarray:
+        """
+        Get the current CG offset for a hull component.
+        
+        Args:
+            component_type: 'nose', 'cyl', or 'tail'
+            
+        Returns:
+            np.ndarray: 3D CG offset [dx, dy, dz] from geometric CG (meters)
+        """
+        if component_type not in ['nose', 'cyl', 'tail']:
+            raise ValueError("component_type must be 'nose', 'cyl', or 'tail'")
+        
+        custom_key = f'{component_type}_cg_offset'
+        if custom_key in self.params:
+            return self._vec(self.params[custom_key]).copy()
+        else:
+            return np.array([0.0, 0.0, 0.0])
 
     #---------------- Setters ----------------
     def set_velocity_arrays(self, vel_body: np.ndarray, omega_body: np.ndarray):
@@ -896,6 +1142,32 @@ class UnderwaterGlider:
         """Set ballast tank fill level directly."""
         self.fill_fraction = np.clip(fill_fraction, 0.0, 1.0)
         # Recalculate mass properties since ballast changed
+        self._calculate_mass_properties()
+    
+    def set_fixed_mass_position(self, position: np.ndarray):
+        """
+        Set the 3D position of the fixed mass component.
+        
+        Args:
+            position: 3D position [x, y, z] in body frame (meters)
+        """
+        # Update the parameter and recalculate mass properties
+        self.params['fixed_position'] = self._vec(position)
+        self._calculate_mass_properties()
+    
+    def set_hull_component_cg_offset(self, component_type: str, offset: np.ndarray):
+        """
+        Set a custom CG offset for a hull component to account for asymmetric geometry.
+        
+        Args:
+            component_type: 'nose', 'cyl', or 'tail'
+            offset: 3D offset [dx, dy, dz] from calculated geometric CG (meters)
+        """
+        if component_type not in ['nose', 'cyl', 'tail']:
+            raise ValueError("component_type must be 'nose', 'cyl', or 'tail'")
+        
+        # Store the offset and recalculate mass properties
+        self.params[f'{component_type}_cg_offset'] = self._vec(offset)
         self._calculate_mass_properties()
 
     def set_state_vector(self, state: np.ndarray):

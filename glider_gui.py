@@ -1115,8 +1115,11 @@ class GliderGUI(QMainWindow):
             cg_x = self.calculate_direct_physics_cg()
             total_length = nose_length + cyl_length + tail_length
             ballast_x = ballast_pos[0]
+            ballast_y = ballast_pos[1]
+            ballast_z = ballast_pos[2]
             moving_mass_x = moving_mass_pos[0]
             moving_mass_y = moving_mass_pos[1]
+            moving_mass_z = moving_mass_pos[2]
             
             # Choose which figure to use based on preview mode
             if preview_mode:
@@ -1158,7 +1161,7 @@ class GliderGUI(QMainWindow):
             ax.add_patch(tail)
 
             # Ballast tank (red)
-            ballast = patches.Rectangle((ballast_x, -ballast_radius), ballast_length, 2*ballast_radius, color='red', alpha=0.5, lw=2, label='Ballast Tank')
+            ballast = patches.Rectangle((ballast_x, -ballast_radius + ballast_y/2), ballast_length, 2*ballast_radius, color='red', alpha=0.5, lw=2, label='Ballast Tank')
             ax.add_patch(ballast)
 
             # Moving mass (orange)
