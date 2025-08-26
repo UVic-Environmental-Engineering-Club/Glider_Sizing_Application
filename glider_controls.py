@@ -219,3 +219,104 @@ def validate_control_outputs(dm_dt, dx_dt, state, glider_params=None):
                 dx_dt = 0.0
     
     return dm_dt, dx_dt, warnings
+
+def yo_yo_control(t, state, surface_depth=2, max_depth=50, cycle_time=300, glider_params=None):
+    """
+    Yo-yo control system that makes the glider alternate between ascending and descending
+    
+    Args:
+        t: Current time (seconds)
+        state: Current state vector [x, y, z, qx, qy, qz, qw, u, v, w, p, q, r, ballast_fill, mvm_offset_x, mvm_offset_y, mvm_offset_z]
+        surface_depth: Depth considered "surface" (meters, positive down)
+        max_depth: Maximum dive depth (meters, positive down)
+        cycle_time: Time for one complete yo-yo cycle (seconds)
+        glider_params: Optional glider parameters for limit checking
+    
+    Returns:
+        dm_dt: Ballast mass rate (kg/s, positive = add ballast)
+        dx_dt: MVM velocity (m/s, positive = move right)
+    """
+    depth = state[2]
+    quat = state[3:7]
+    current_fill = state[13] if len(state) > 13 else 0.5
+    
+    # Calculate phase in the yo-yo cycle (0 to 1)
+    cycle_phase = (t % cycle_time) / cycle_time
+    
+    # Determine if we're in ascent or descent phase
+    if cycle_phase < 0.5:
+        # Descent phase (0 to 0.5): add ballast to sink
+        target_depth = max_depth
+        is_descent = True
+    else:
+        # Ascent phase (0.5 to 1.0): remove ballast to rise
+        target_depth = surface_depth
+        is_descent = False
+    
+    # Calculate depth error
+    depth_error = target_depth - depth
+    
+    # Ballast control with proportional control and physics-based limits
+    if glider_params:
+        max_ballast_flow = glider_params.get('max_ballast_flow', 1e-3)  # m³/s
+        rho_water = glider_params.get('rho_water', 1025.0)  # kg/m³
+        max_mass_rate = max_ballast_flow * rho_water
+        
+        # Proportional control with higher gain for yo-yo behavior
+        dm_dt = np.clip(depth_error * 0.15, -max_mass_rate, max_mass_rate)
+        
+        # Prevent over/under-filling
+        if current_fill <= 0.01 and dm_dt < 0:  # Nearly empty, can't remove more
+            dm_dt = 0.0
+        elif current_fill >= 0.99 and dm_dt > 0:  # Nearly full, can't add more
+            dm_dt = 0.0
+    else:
+        # Fallback to original limits if no params provided
+        dm_dt = np.clip(depth_error * 0.15, -0.5, 0.5)
+    
+    # Pitch control to maintain efficient glide during yo-yo
+    try:
+        euler = R.from_quat(quat).as_euler('xyz')
+        pitch = euler[1]  # Pitch angle in radians
+        
+        # Target pitch depends on phase
+        if is_descent:
+            target_pitch = np.radians(-15)  # Nose down for descent
+        else:
+            target_pitch = np.radians(15)   # Nose up for ascent
+        
+        pitch_error = target_pitch - pitch
+        
+        # Get current MVM offset from state
+        current_mvm_x = state[14] if len(state) > 14 else 0.0
+        
+        # Calculate MVM control with limits
+        if glider_params:
+            mvm_length = glider_params.get('MVM_length', 0.5)  # m
+            max_mvm_velocity = 0.02  # m/s (reasonable actuator speed)
+            
+            # Scale factor: 0.01 m/s per radian of pitch error, with physics limits
+            dx_dt = np.clip(pitch_error * 0.01, -max_mvm_velocity, max_mvm_velocity)
+            
+            # Additional limit: prevent MVM from exceeding travel limits
+            max_offset = mvm_length / 2
+            if current_mvm_x <= -max_offset + 0.01 and dx_dt < 0:  # At left limit
+                dx_dt = 0.0
+            elif current_mvm_x >= max_offset - 0.01 and dx_dt > 0:  # At right limit
+                dx_dt = 0.0
+        else:
+            # Fallback to original limits if no params provided
+            dx_dt = np.clip(pitch_error * 0.01, -0.02, 0.02)
+            
+    except Exception as e:
+        print(f"Pitch control error: {e}")
+        dx_dt = 0.0
+    
+    # Debug output (uncomment for debugging)
+    # if t % 10.0 < 0.1:  # Print every ~10 seconds
+    #     phase_name = "DESCENT" if is_descent else "ASCENT"
+    #     print(f"t={t:.1f}: {phase_name} | depth={depth:.2f}, target={target_depth}, error={depth_error:.2f}, dm_dt={dm_dt:.3f}")
+    #     print(f"  pitch={np.degrees(pitch):.1f}°, target={np.degrees(target_pitch):.1f}°, dx_dt={dx_dt:.4f}")
+    #     print(f"  ballast_fill={current_fill:.3f}, cycle_phase={cycle_phase:.2f}")
+    
+    return dm_dt, dx_dt

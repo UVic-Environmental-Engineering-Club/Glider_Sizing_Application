@@ -66,6 +66,10 @@ class UnderwaterGlider:
             'MVM_length': 0.5,
             'current_fill':0,
 
+            # Watertight options for the nose and tail
+            'nose_Watertight': True,
+            'tail_Watertight': True,
+
             # Environment
             'rho_water': 1025.0,
             'g': 9.81,
@@ -131,6 +135,10 @@ class UnderwaterGlider:
         # Control limits
         self.max_ballast_flow = float(self.params.get('max_ballast_flow', 1e-3))
         self.MVM_length = float(self.params.get('MVM_length', 0.5))
+        
+        # Watertight sections (for buoyancy calculations)
+        self.nose_Watertight = bool(self.params.get('nose_Watertight', True))
+        self.tail_Watertight = bool(self.params.get('tail_Watertight', True))
         
         # Base positions for dynamic components
         # These positions define the geometric center of each component in 3D space
@@ -244,6 +252,8 @@ class UnderwaterGlider:
         for asymmetric geometries using custom CG offset parameters.
         """
         # --- Hull (thin-shell approximations) ---
+        # Nose cone: Use elliptical cone approximation for more accurate geometry
+        # Surface area of elliptical cone: π * r * √(r² + L²) where r is base radius
         nose_area = self._pi * self.nose_radius * np.sqrt(self.nose_radius**2 + self.nose_length**2)
         cyl_area  = 2.0 * self._pi * self.hull_radius * self.cyl_length
         tail_area = self._pi * self.tail_radius * np.sqrt(self.tail_radius**2 + self.tail_length**2)
@@ -257,7 +267,12 @@ class UnderwaterGlider:
         r_inner = self.ballast_radius - self.tank_thickness
         tank_volume = self._pi * (r_inner**2) * self.ballast_length   # internal fillable volume
         shell_area  = 2.0 * self._pi * self.ballast_radius * self.ballast_length
-        m_tank_shell = shell_area * self.tank_thickness * self.tank_density
+        
+        
+        end_cap_area = self._pi * self.ballast_radius**2
+        total_tank_area = shell_area + end_cap_area
+        
+        m_tank_shell = total_tank_area * self.tank_thickness * self.tank_density
 
         # --- Dynamic ballast water mass ---
         V_ballast = np.clip(self.fill_fraction, 0.0, 1.0) * tank_volume
@@ -326,6 +341,8 @@ class UnderwaterGlider:
             return
 
         # Rate of change of volume (m³/s), limited by pump capacity
+        # NOTE: Pump performance is depth-dependent
+        # need to implement depth dependent pump performance
         dV_dt = self.pump_direction * self.max_ballast_flow
         d_fill = (dV_dt * dt) / self._tank_volume
 
@@ -462,14 +479,19 @@ class UnderwaterGlider:
         V_tail = (1.0/3.0) * self._pi * self.tail_radius**2 * self.tail_length
         tail_cg_x = self.nose_length + self.cyl_length + (2.0/3.0) * self.tail_length
 
-        V_hull_external = V_nose + V_cyl + V_tail
         
-        # Subtract ballast tank volume (the tank displaces water and reduces buoyancy)
-        V_ballast_tank = self._pi * self.ballast_radius**2 * self.ballast_length
-        V_total = V_hull_external - V_ballast_tank
+        # NOTE: Buoyancy is based on external geometry displacement
+        # The nose and tail could not be watertight, but the cylinder is
+        # self.nose_Watertight and self.tail_Watertight are boolean flags that are set in the constructor/GUI
+        if self.nose_Watertight == False:
+            V_nose = 0.0
+        if self.tail_Watertight == False:
+            V_tail = 0.0
+        
+        V_total = V_cyl + V_nose + V_tail
         
         # center of buoyancy x-coordinate (in body frame) - use external hull for CB calculation
-        x_cb = (V_nose * nose_cg_x + V_cyl * cyl_cg_x + V_tail * tail_cg_x) / max(V_hull_external, 1e-12)
+        x_cb = (V_nose * nose_cg_x + V_cyl * cyl_cg_x + V_tail * tail_cg_x) / max(V_total, 1e-12)
         self.cb = np.array([x_cb, 0.0, 0.0])
         
         # Store volume for later use
@@ -528,6 +550,11 @@ class UnderwaterGlider:
         Fd_x = -0.5 * rho * Cd_x * A_x * V_mag * u
         Fd_y = -0.5 * rho * Cd_y * A_yz * V_mag * v  
         Fd_z = -0.5 * rho * Cd_z * A_yz * V_mag * w
+        
+        # NOTE: At higher angles of attack, drag forces may not act purely along body axes
+        # For more accurate modeling, we may need to project drag forces along the direction of flow
+        # This would require calculating the actual flow direction relative to the body and
+        # resolving forces accordingly. Current implementation assumes drag acts along body axes.
         
         # Lift force (acts perpendicular to flow direction)
         if V_mag > 1e-6:
@@ -754,12 +781,13 @@ class UnderwaterGlider:
         return aoa_deg
 
     
-    def compute_state_derivatives(self, t: float, state: np.ndarray) -> np.ndarray:
+    def compute_state_derivatives(self, t: float, state: np.ndarray, dt: float = 0.1) -> np.ndarray:
         """
         Compute derivatives for ODE integration.
         Args:
             t: Current time
             state: [x, y, z, qx, qy, qz, qw, u, v, w, p, q, r, ballast_fill, mvm_offset_x, mvm_offset_y, mvm_offset_z]
+            dt: Time step for rate limiting calculations
         Returns:
             Derivatives [ẋ, ẏ, ż, q̇x, q̇y, q̇z, q̇w, u̇, v̇, ẇ, ṗ̇, q̇, ṙ̇, ballast_fill_rate, mvm_offset_rate_x, mvm_offset_rate_y, mvm_offset_rate_z]
         """
@@ -785,9 +813,30 @@ class UnderwaterGlider:
         if self.pump_on and self.pump_direction != 0:
             dV_dt = self.pump_direction * self.max_ballast_flow
             ballast_fill_rate = (dV_dt) / self._tank_volume
+            
+            # Apply additional limits to prevent over/under-filling
+            current_fill = self.fill_fraction
+            if current_fill <= 0.01 and ballast_fill_rate < 0:
+                # Nearly empty, can't remove more
+                ballast_fill_rate = 0.0
+            elif current_fill >= 0.99 and ballast_fill_rate > 0:
+                # Nearly full, can't add more
+                ballast_fill_rate = 0.0
+            
+            # Final safety check: ensure the rate won't cause fill to exceed bounds
+            if current_fill + ballast_fill_rate * dt > 1.0:
+                ballast_fill_rate = max(0.0, (1.0 - current_fill) / dt)
+            elif current_fill + ballast_fill_rate * dt < 0.0:
+                ballast_fill_rate = min(0.0, -current_fill / dt)
         
         # MVM offset rate (assume controlled externally, default to zero)
         mvm_offset_rate = np.array([0.0, 0.0, 0.0])
+        
+        # Use the desired rate from control system if available
+        if hasattr(self, '_desired_mvm_rate'):
+            mvm_offset_rate[0] = self._desired_mvm_rate
+        else:
+            self._desired_mvm_rate = 0.0
         
         # Enforce travel limits by clipping the rate
         current_offset = self.mvm_offset
@@ -813,7 +862,8 @@ class UnderwaterGlider:
             np.ndarray: 3D CG position [x, y, z] in body frame (meters)
         """
         if component_type == 'nose':
-            # Nose cone: truncated cone with base radius = hull_radius, tip radius = 0
+            # Nose cone: elliptical cone with base radius = hull_radius, tip radius = 0
+            # Using elliptical cone approximation for more accurate geometry modeling
             # Geometry: Starts at X=0 (nose tip) and extends to X=nose_length
             # CG of a cone is at 1/4 height from base (3/4 from tip)
             # - X: 0.75 * nose_length (measured from nose tip)
@@ -833,8 +883,8 @@ class UnderwaterGlider:
             # Cylindrical section: CG is at geometric center
             # Geometry: Extends from X=nose_length to X=nose_length+cyl_length
             # - X: nose_length + 0.5*cyl_length (center of cylinder)
-            # - Y: 0.0 (centered on centerline, can be offset for asymmetry)
-            # - Z: 0.0 (centered on centerline, can be offset for asymmetry)
+            # - Y: 0.0 (centered on axis of symmetry)
+            # - Z: 0.0 (centered on axis of symmetry)
             x = self.nose_length + 0.5 * self.cyl_length
             y = 0.0  # Centered on axis of symmetry
             z = 0.0  # Centered on axis of symmetry
@@ -1183,7 +1233,7 @@ class UnderwaterGlider:
         self.attitude = state[3:7]
         self.u, self.v, self.w = state[7:10]
         self.p, self.q, self.r = state[10:13]
-        self.fill_fraction = state[13]
+        self.fill_fraction = np.clip(state[13], 0.0, 1.0)  # Ensure ballast fill stays within 0-100%
         self.mvm_offset = state[14:17]
         
         # Enforce MVM travel limits

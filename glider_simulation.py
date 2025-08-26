@@ -183,25 +183,23 @@ def run_simulation(params, control_func=None, t_end=1, dt=1,
                 dm_dt, dx_dt = control_func(t, y)
                 
                 # Apply control inputs by updating the glider state
-                # For ballast control, use the pump system
+                # For ballast control, set the pump state (don't step the ballast here)
                 if abs(dm_dt) > 1e-6:  # Only update if there's a significant rate
                     # Set pump state based on desired mass rate
                     glider.set_pump_from_mass_rate(dm_dt)
                     
-                    # Step the ballast system using the physics engine
-                    glider.step_ballast(dt)
-                    
-                    # Update the state vector with new ballast fill
-                    y[13] = glider.fill_fraction
-                
-                # For MVM control, use the physics engine's MVM system
-                if abs(dx_dt) > 1e-6:  # Only update if there's a significant rate
-                    current_offset_x = y[14]  # MVM x offset from state vector
-                    new_offset_x = np.clip(current_offset_x + dx_dt * dt, -glider.MVM_length/2, glider.MVM_length/2)
-                    y[14] = new_offset_x
-                    
                     # Update the glider's MVM offset to keep it in sync
-                    glider.mvm_offset[0] = new_offset_x
+                    glider.mvm_offset[0] = y[14]
+                    glider.mvm_offset[1] = y[15] 
+                    glider.mvm_offset[2] = y[16]
+                
+                # For MVM control, calculate the rate but don't update position here
+                # The position will be updated by the ODE solver using the derivatives
+                if abs(dx_dt) > 1e-6:  # Only update if there's a significant rate
+                    # Store the desired rate in the glider for the derivative calculation
+                    glider._desired_mvm_rate = dx_dt
+                else:
+                    glider._desired_mvm_rate = 0.0
                 
                 # # Debug output (uncomment to see control values)
                 # if t % 1.0 < 0.1:  # Print every ~1 second
@@ -232,9 +230,20 @@ def run_simulation(params, control_func=None, t_end=1, dt=1,
             # Return zero derivatives for invalid state
             return np.zeros_like(y)
         
+        # Safety check: ensure ballast fill stays within 0-100%
+        if len(y) > 13:
+            y[13] = np.clip(y[13], 0.0, 1.0)
+        
+        # Safety check: ensure MVM offset stays within travel limits
+        if len(y) > 14 and hasattr(glider, 'MVM_length'):
+            max_offset = glider.MVM_length / 2
+            y[14] = np.clip(y[14], -max_offset, max_offset)
+            y[15] = np.clip(y[15], -max_offset, max_offset)
+            y[16] = np.clip(y[16], -max_offset, max_offset)
+        
         # Use the available compute_state_derivatives method
         try:
-            derivatives = glider.compute_state_derivatives(t, y)
+            derivatives = glider.compute_state_derivatives(t, y, dt)
             
             # # Debug output every 0.5 seconds to see forces
             # if t % 0.5 < 0.01:  # Print every ~0.5 seconds

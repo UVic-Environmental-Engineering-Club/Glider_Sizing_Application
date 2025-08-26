@@ -213,7 +213,7 @@ class GliderGUI(QMainWindow):
         self.tend_spin = QDoubleSpinBox()
         self.tend_spin.setDecimals(1)
         self.tend_spin.setRange(1, 10000)
-        self.tend_spin.setValue(60)
+        self.tend_spin.setValue(600)  # 10 minutes default for yo-yo cycles
         sim_ctrl_layout.addWidget(self.tend_spin)
         # Solver method
         sim_ctrl_layout.addWidget(QLabel("Solver:"))
@@ -237,8 +237,55 @@ class GliderGUI(QMainWindow):
         # Control system
         sim_ctrl_layout.addWidget(QLabel("Control System:"))
         self.control_combo = QComboBox()
-        self.control_combo.addItems(["Depth/Pitch Control", "Trajectory Following Control", "Simple Depth Control", "Neutral Buoyancy Control"])
+        self.control_combo.addItems(["Depth/Pitch Control", "Yo-Yo Control", "Trajectory Following Control", "Simple Depth Control", "Neutral Buoyancy Control"])
+        self.control_combo.currentTextChanged.connect(self.on_control_system_changed)
         sim_ctrl_layout.addWidget(self.control_combo)
+        
+        # Yo-yo control parameters (initially hidden)
+        self.yoyo_params_group = QGroupBox("Yo-Yo Control Parameters")
+        self.yoyo_params_layout = QVBoxLayout()
+        
+        # Surface depth
+        surface_depth_layout = QHBoxLayout()
+        surface_depth_layout.addWidget(QLabel("Surface Depth (m):"))
+        self.surface_depth_spin = QDoubleSpinBox()
+        self.surface_depth_spin.setDecimals(1)
+        self.surface_depth_spin.setRange(0.5, 10.0)
+        self.surface_depth_spin.setValue(2.0)
+        self.surface_depth_spin.setToolTip("Depth considered 'surface' for yo-yo control")
+        surface_depth_layout.addWidget(self.surface_depth_spin)
+        self.yoyo_params_layout.addLayout(surface_depth_layout)
+        
+        # Maximum depth
+        max_depth_layout = QHBoxLayout()
+        max_depth_layout.addWidget(QLabel("Maximum Depth (m):"))
+        self.max_depth_spin = QDoubleSpinBox()
+        self.max_depth_spin.setDecimals(1)
+        self.max_depth_spin.setRange(10.0, 200.0)
+        self.max_depth_spin.setValue(50.0)
+        self.max_depth_spin.setToolTip("Maximum dive depth for yo-yo control")
+        max_depth_layout.addWidget(self.max_depth_spin)
+        self.yoyo_params_layout.addLayout(max_depth_layout)
+        
+        # Cycle time
+        cycle_time_layout = QHBoxLayout()
+        cycle_time_layout.addWidget(QLabel("Cycle Time (s):"))
+        self.cycle_time_spin = QDoubleSpinBox()
+        self.cycle_time_spin.setDecimals(0)
+        self.cycle_time_spin.setRange(60, 1800)
+        self.cycle_time_spin.setValue(300)
+        self.cycle_time_spin.setSuffix(" s")
+        self.cycle_time_spin.setToolTip("Time for one complete yo-yo cycle (ascent + descent)")
+        self.cycle_time_spin.valueChanged.connect(self.on_cycle_time_changed)
+        cycle_time_layout.addWidget(self.cycle_time_spin)
+        self.yoyo_params_layout.addLayout(cycle_time_layout)
+        
+        self.yoyo_params_group.setLayout(self.yoyo_params_layout)
+        sim_ctrl_layout.addWidget(self.yoyo_params_group)
+        
+        # Initially hide yo-yo parameters
+        self.yoyo_params_group.setVisible(False)
+        
         sim_layout.addLayout(sim_ctrl_layout)
         
         # Progress bar and status
@@ -627,6 +674,11 @@ class GliderGUI(QMainWindow):
         self._add_parameter_field(hull_layout, "tail_radius", "Tail Radius (m)", "0.04")
         self._add_parameter_field(hull_layout, "hull_thickness", "Hull Thickness (m)", "0.005")
         self._add_parameter_field(hull_layout, "hull_density", "Hull Density (kg/m³)", "2700")
+        
+        # Watertight sections (for buoyancy calculations)
+        self._add_boolean_parameter_field(hull_layout, "nose_Watertight", "Nose Section Watertight", True)
+        self._add_boolean_parameter_field(hull_layout, "tail_Watertight", "Tail Section Watertight", True)
+        
         hull_group.setLayout(hull_layout)
         geom_layout.addWidget(hull_group)
         
@@ -658,7 +710,7 @@ class GliderGUI(QMainWindow):
         self._add_parameter_field(mass_group_layout, "MVM_mass", "Moving Mass (kg)", "5.0")
         self._add_parameter_field(mass_group_layout, "Moving_Mass_base_position", "MVM Base Position (x,y,z)", "0.5,0,0")
         self._add_parameter_field(mass_group_layout, "MVM_length", "MVM Travel Length (m)", "0.5")
-        self._add_parameter_field(mass_group_layout, "I_dry_base", "Dry Inertia (diag) kg·m²", "2.0,3.0,1.5")
+        self._add_parameter_field(mass_group_layout, "I_dry_base", "Dry Inertia (3x3 matrix) kg·m²", "[2.0, 0.0, 0.0],[0.0, 3.0, 0.0],[0.0, 0.0, 1.5]")
         mass_group.setLayout(mass_group_layout)
         mass_layout.addWidget(mass_group)
         
@@ -783,6 +835,17 @@ class GliderGUI(QMainWindow):
         hbox.addWidget(field)
         layout.addLayout(hbox)
 
+    def _add_boolean_parameter_field(self, layout, name, label, default):
+        """Add a boolean parameter field using a checkbox"""
+        hbox = QHBoxLayout()
+        hbox.addWidget(QLabel(label))
+        from PyQt5.QtWidgets import QCheckBox
+        field = QCheckBox()
+        field.setChecked(default)
+        self.param_fields[name] = field
+        hbox.addWidget(field)
+        layout.addLayout(hbox)
+
     def browse_cfd_file(self):
         """Open file dialog to select a CFD table file"""
         from PyQt5.QtWidgets import QFileDialog
@@ -821,8 +884,31 @@ class GliderGUI(QMainWindow):
         self.update_cross_preview()
         self.update_stability_analysis()
         
+    def on_control_system_changed(self, control_system):
+        """Show/hide control system specific parameters based on selection"""
+        if control_system == "Yo-Yo Control":
+            self.yoyo_params_group.setVisible(True)
+            # Ensure simulation duration covers at least one complete cycle
+            cycle_time = self.cycle_time_spin.value()
+            if self.tend_spin.value() < cycle_time * 2:  # At least 2 cycles
+                self.tend_spin.setValue(cycle_time * 2)
+        else:
+            self.yoyo_params_group.setVisible(False)
+    
+    def on_cycle_time_changed(self, cycle_time):
+        """Update simulation duration when yo-yo cycle time changes"""
+        if self.control_combo.currentText() == "Yo-Yo Control":
+            # Ensure simulation duration covers at least 2 complete cycles
+            if self.tend_spin.value() < cycle_time * 2:
+                self.tend_spin.setValue(cycle_time * 2)
+    
     def save_params(self):
-        params = {name: field.text() for name, field in self.param_fields.items()}
+        params = {}
+        for name, field in self.param_fields.items():
+            if isinstance(field, QLineEdit):
+                params[name] = field.text()
+            elif hasattr(field, 'isChecked'):  # Checkbox
+                params[name] = field.isChecked()
         try:
             with open(self.PARAMS_FILE, "w") as f:
                 json.dump(params, f)
@@ -972,17 +1058,25 @@ class GliderGUI(QMainWindow):
             # Apply to input fields using the correct field names
             for name, value in params.items():
                 if name in self.param_fields:
-                    if isinstance(value, list):
+                    field = self.param_fields[name]
+                    if hasattr(field, 'isChecked'):  # Checkbox (boolean)
+                        # Handle boolean parameters
+                        if isinstance(value, bool):
+                            field.setChecked(value)
+                        else:
+                            # Convert string/numeric to boolean if needed
+                            field.setChecked(bool(value))
+                    elif isinstance(value, list):
                         # Handle vector parameters (converted from numpy arrays)
                         if name.endswith('_position') or name == 'I_dry_base':
                             # Convert list back to comma-separated string
-                            self.param_fields[name].setText(','.join(map(str, value)))
+                            field.setText(','.join(map(str, value)))
                         else:
                             # Handle other list parameters
-                            self.param_fields[name].setText(str(value))
+                            field.setText(str(value))
                     else:
                         # Handle scalar parameters
-                        self.param_fields[name].setText(str(value))
+                        field.setText(str(value))
             
             # Apply to stability controls if they exist
             if 'current_fill' in params and hasattr(self, 'ballast_fill_spin'):
@@ -1002,7 +1096,17 @@ class GliderGUI(QMainWindow):
                     params = json.load(f)
                 for name, value in params.items():
                     if name in self.param_fields:
-                        self.param_fields[name].setText(value)
+                        field = self.param_fields[name]
+                        if hasattr(field, 'isChecked'):  # Checkbox (boolean)
+                            # Handle boolean parameters
+                            if isinstance(value, bool):
+                                field.setChecked(value)
+                            else:
+                                # Convert string/numeric to boolean if needed
+                                field.setChecked(bool(value))
+                        else:
+                            # Handle text fields
+                            field.setText(str(value))
             except Exception as e:
                 print(f"[Load Error] {e}")
                 
@@ -1012,13 +1116,38 @@ class GliderGUI(QMainWindow):
         for name, field in self.param_fields.items():
             try:
                 # Handle different parameter types
-                if name.endswith('_position'):
+                if hasattr(field, 'isChecked'):  # Checkbox (boolean)
+                    params[name] = field.isChecked()
+                elif name.endswith('_position'):
                     # Parse vector input (e.g., "0.8, 0, 0")
                     params[name] = np.array([float(x) for x in field.text().split(',')])
                 elif name == 'I_dry_base':
-                    # Parse inertia matrix (simplified diagonal)
-                    diag = [float(x) for x in field.text().split(',')]
-                    params[name] = np.diag(diag)
+                    # Parse inertia matrix - matrix format: [2.0, 0.0, 0.0],[0.0, 3.0, 0.0],[0.0, 0.0, 1.5]
+                    text = field.text().strip()
+                    # Remove quotes if present
+                    if text.startswith('"') and text.endswith('"'):
+                        text = text[1:-1]
+                    
+                    try:
+                        # Split by rows and parse each row
+                        rows = text.split('],[')
+                        matrix = []
+                        for row in rows:
+                            # Clean up row string
+                            row = row.replace('[', '').replace(']', '').strip()
+                            if not row:  # Skip empty rows
+                                continue
+                            row_values = [float(x.strip()) for x in row.split(',')]
+                            matrix.append(row_values)
+                        
+                        if len(matrix) == 3 and all(len(row) == 3 for row in matrix):
+                            params[name] = np.array(matrix)
+                        else:
+                            print(f"Invalid matrix dimensions for {name}: expected 3x3, got {len(matrix)}x{len(matrix[0]) if matrix else 0}")
+                            return None
+                    except Exception as e:
+                        print(f"Error parsing matrix format for {name}: {e}")
+                        return None
                 else:
                     # Regular scalar parameter
                     params[name] = float(field.text())
@@ -1058,8 +1187,17 @@ class GliderGUI(QMainWindow):
                 + (1/3) * np.pi * tail_radius**2 * tail_length
             V_ballast = np.pi * ballast_radius**2 * ballast_length
             
-            # Subtract ballast tank volume (the tank displaces water and reduces buoyancy)
-            V_hull = V_hull_external - V_ballast
+            # Consider watertight sections for buoyancy calculation
+            # Get watertight flags from GUI (default to True if not available)
+            nose_watertight = getattr(self.param_fields.get('nose_Watertight'), 'isChecked', lambda: True)()
+            tail_watertight = getattr(self.param_fields.get('tail_Watertight'), 'isChecked', lambda: True)()
+            
+            # Calculate effective hull volume based on watertight sections
+            V_nose = (1/3) * np.pi * nose_radius**2 * nose_length if nose_watertight else 0.0
+            V_cyl = np.pi * hull_radius**2 * cyl_length  # Cylinder is always watertight
+            V_tail = (1/3) * np.pi * tail_radius**2 * tail_length if tail_watertight else 0.0
+            
+            V_hull = V_nose + V_cyl + V_tail  # Don't subtract ballast tank volume
             
             ballast_mass_50 = rho_water * V_ballast * 0.5
             
@@ -1086,7 +1224,7 @@ class GliderGUI(QMainWindow):
                 status += " (Negatively buoyant)"
             self.feedback_label.setText(
                 f"External Hull Vol: {V_hull_external:.3f} m³ | Ballast Tank Vol: {V_ballast:.3f} m³\n"
-                f"Buoyancy Vol: {V_hull:.3f} m³ | Ballast@50%: {ballast_mass_50:.2f} kg\n"
+                f"Buoyancy Vol: {V_hull:.3f} m³ (Watertight: Nose={nose_watertight}, Tail={tail_watertight}) | Ballast@50%: {ballast_mass_50:.2f} kg\n"
                 f"Dry Mass: {dry_mass:.2f} kg | Total@50%: {total_mass_50:.2f} kg\n"
                 f"Buoyant Mass: {buoyant_mass:.2f} kg | {status}"
             )
@@ -1314,10 +1452,24 @@ class GliderGUI(QMainWindow):
             'init_pitch': init_pitch
         }
         
+        # Add yo-yo specific parameters if selected
+        if control_choice == "Yo-Yo Control":
+            self.control_params.update({
+                'surface_depth': self.surface_depth_spin.value(),
+                'max_depth': self.max_depth_spin.value(),
+                'cycle_time': self.cycle_time_spin.value()
+            })
+        
         # Select control system
         from glider_controls import depth_pitch_control, trajectory_following_control, simple_depth_control
         if control_choice == "Depth/Pitch Control":
             control_func = lambda t, s: depth_pitch_control(t, s, desired_depth, desired_pitch, params)
+        elif control_choice == "Yo-Yo Control":
+            from glider_controls import yo_yo_control
+            surface_depth = self.surface_depth_spin.value()
+            max_depth = self.max_depth_spin.value()
+            cycle_time = self.cycle_time_spin.value()
+            control_func = lambda t, s: yo_yo_control(t, s, surface_depth, max_depth, cycle_time, params)
         elif control_choice == "Trajectory Following Control":
             waypoints = [np.array([0,0,desired_depth]), np.array([10,0,init_depth])]
             control_func = lambda t, s: trajectory_following_control(t, s, waypoints, params)
@@ -1413,7 +1565,8 @@ class GliderGUI(QMainWindow):
             roll = euler_angles[2]
             
             # Calculate forces (F = ma)
-            mass = 50.0  # Approximate mass
+            params = self.get_parameters()
+            mass = params.get('mass', 50.0) if params else 50.0
             Fx = mass * ax
             Fy = mass * ay
             Fz = mass * az
@@ -1482,7 +1635,30 @@ class GliderGUI(QMainWindow):
             # Format control summary
             control_summary = (
                 f"Control System: {self.control_params['control_system']}\n"
-                f"Target Depth: {desired_depth:.1f}m | Final Depth: {actual_depth[-1]:.1f}m\n"
+            )
+            
+            # Add control system specific information
+            if self.control_params['control_system'] == "Yo-Yo Control":
+                surface_depth = self.control_params.get('surface_depth', 2.0)
+                max_depth = self.control_params.get('max_depth', 50.0)
+                cycle_time = self.control_params.get('cycle_time', 300.0)
+                
+                # Calculate yo-yo performance metrics
+                depth_range = max_depth - surface_depth
+                current_cycle_phase = (solution.t[-1] % cycle_time) / cycle_time
+                phase_name = "DESCENT" if current_cycle_phase < 0.5 else "ASCENT"
+                
+                control_summary += (
+                    f"Yo-Yo Parameters: Surface={surface_depth:.1f}m, Max={max_depth:.1f}m, Cycle={cycle_time:.0f}s\n"
+                    f"Depth Range: {depth_range:.1f}m | Current Phase: {phase_name}\n"
+                    f"Target Depth: {desired_depth:.1f}m | Final Depth: {actual_depth[-1]:.1f}m\n"
+                )
+            else:
+                control_summary += (
+                    f"Target Depth: {desired_depth:.1f}m | Final Depth: {actual_depth[-1]:.1f}m\n"
+                )
+            
+            control_summary += (
                 f"Max Error: {max_error:.2f}m | Final Error: {final_error:.2f}m\n"
                 f"Settling Time: {settling_time:.1f}s" if settling_time else "Settling Time: Not reached"
             )
@@ -1836,7 +2012,8 @@ class GliderGUI(QMainWindow):
         ax1.set_title('Acceleration Components')
         
         # Force analysis (F = ma, approximate)
-        mass = self.params.get('mass', 50.0)
+        params = self.get_parameters()
+        mass = params.get('mass', 50.0) if params else 50.0
         Fx = mass * ax
         Fy = mass * ay
         Fz = mass * az
@@ -1880,10 +2057,11 @@ class GliderGUI(QMainWindow):
     def plot_energy_analysis(self, solution):
         """Energy analysis plots with power consumption for battery sizing"""
         self.sim_fig.clear()
+        params = self.get_parameters()
         
         # Calculate energies
         g = 9.81  # gravity
-        mass = self.params.get('mass', 50.0)
+        mass = params.get('mass')
         
         # Potential energy (PE = mgh, where h is depth)
         depth = solution.y[2, :]
@@ -2087,7 +2265,13 @@ class GliderGUI(QMainWindow):
                 
                 # Show control system info
                 control_system = self.control_params['control_system']
-                ax4.set_title(f'{control_system}\nTarget Depth: {desired_depth}m')
+                if control_system == "Yo-Yo Control":
+                    surface_depth = self.control_params.get('surface_depth', 2.0)
+                    max_depth = self.control_params.get('max_depth', 50.0)
+                    cycle_time = self.control_params.get('cycle_time', 300.0)
+                    ax4.set_title(f'{control_system}\nSurface: {surface_depth}m, Max: {max_depth}m, Cycle: {cycle_time:.0f}s')
+                else:
+                    ax4.set_title(f'{control_system}\nTarget Depth: {desired_depth}m')
                 ax4.set_ylabel('Depth Error (m)')
                 ax4.set_xlabel('Time (s)')
                 ax4.grid(True)
