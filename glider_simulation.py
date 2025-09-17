@@ -202,18 +202,18 @@ def run_simulation(params, control_func=None, t_end=1, dt=1,
                     glider._desired_mvm_rate = 0.0
                 
                 # # Debug output (uncomment to see control values)
-                # if t % 1.0 < 0.1:  # Print every ~1 second
-                #     current_depth = y[2]  # Depth is at index 2 in state vector
+                if t % 1.0 < 0.1:  # Print every ~1 second
+                     current_depth = y[2]  # Depth is at index 2 in state vector
                     
-                #     # Get current forces and mass for debug
-                #     glider.compute_forces_and_moments()
+                     # Get current forces and mass for debug
+                     glider.compute_forces_and_moments()
                     
-                #     # Call the detailed force debug method
-                #     glider.debug_forces()
+                     # Call the detailed force debug method
+                     glider.debug_forces()
                     
-                #     print(f"t={t:.1f}: Control applied - dm_dt={dm_dt:.4f}, dx_dt={dx_dt:.4f}")
-                #     print(f"  Depth: {current_depth:.2f}m | Pump: {'ON' if glider.pump_on else 'OFF'}, Direction: {glider.pump_direction}")
-                #     print(f"  Ballast fill: {glider.fill_fraction:.3f}, MVM x: {glider.mvm_offset[0]:.3f}")
+                     print(f"t={t:.1f}: Control applied - dm_dt={dm_dt:.4f}, dx_dt={dx_dt:.4f}")
+                     print(f"  Depth: {current_depth:.2f}m | Pump: {'ON' if glider.pump_on else 'OFF'}, Direction: {glider.pump_direction}")
+                     print(f"  Ballast fill: {glider.fill_fraction:.3f}, MVM x: {glider.mvm_offset[0]:.3f}")
                 
             except Exception as e:
                 print(f"Control function error at t={t}: {e}")

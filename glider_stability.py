@@ -37,6 +37,7 @@ class GliderStability:
         
         # Extract key parameters for stability calculations
         self.hull_radius = float(glider_params.get('hull_radius', 0.08))
+        self.hull_thickness = float(glider_params.get('hull_thickness', 0.002))
         self.rho_water = float(glider_params.get('rho_water', 1025.0))
         self.g = float(glider_params.get('g', 9.81))
         
@@ -74,12 +75,16 @@ class GliderStability:
         return self.glider.V_hull
 
     def get_inertia(self) -> float:
-        """Get inertia from physics calculations"""
+        """Get second moment of inertia of the waterplane"""
         self._update_glider_state()
-        return self.glider.I_body[0,0]
+        r_o = self.hull_radius
+        r_i = self.hull_radius - self.hull_thickness
+        # Second moment of inertia of a thin-walled circular tube
+        I = np.pi * (r_o**4 - r_i**4) / 4
+        return I
     
     def calculate_meta_center(self) -> Tuple[float, float, float]:
-        """Calculate meta center position using physics-based volumes and CB"""
+        """Calculate meta center position using waterplane second moment of inertia"""
         cb = self.get_center_of_buoyancy()
         
         hull_inertia = self.get_inertia()

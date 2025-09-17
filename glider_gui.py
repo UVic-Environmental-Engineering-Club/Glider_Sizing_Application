@@ -353,6 +353,20 @@ class GliderGUI(QMainWindow):
         self.btn_export.setEnabled(False)
         button_layout.addWidget(self.btn_export)
         
+        # Add export plots button
+        self.btn_export_plots = QPushButton("📊 Export All Plots")
+        self.btn_export_plots.clicked.connect(self.export_all_plots)
+        self.btn_export_plots.setEnabled(False)
+        self.btn_export_plots.setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; padding: 8px; }")
+        button_layout.addWidget(self.btn_export_plots)
+        
+        # Add individual plot export button
+        self.btn_export_current = QPushButton("📈 Export Current Plot")
+        self.btn_export_current.clicked.connect(self.export_current_plot)
+        self.btn_export_current.setEnabled(False)
+        self.btn_export_current.setStyleSheet("QPushButton { background-color: #9C27B0; color: white; font-weight: bold; padding: 8px; }")
+        button_layout.addWidget(self.btn_export_current)
+        
         sim_layout.addLayout(button_layout)
         self.tabs.addTab(sim_tab, "Simulation")
         # --- Converter Tab ---
@@ -1504,6 +1518,8 @@ class GliderGUI(QMainWindow):
         # Disable buttons during simulation
         self.btn_run.setEnabled(False)
         self.btn_export.setEnabled(False)
+        self.btn_export_plots.setEnabled(False)  # Disable during simulation
+        self.btn_export_current.setEnabled(False)  # Disable during simulation
         
     def update_progress(self, value):
         """Update progress bar during simulation"""
@@ -1778,6 +1794,168 @@ class GliderGUI(QMainWindow):
                 
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Failed to export data:\n{str(e)}")
+    
+    def export_current_plot(self):
+        """Export the currently displayed plot"""
+        if not hasattr(self, 'last_solution') or self.last_solution is None:
+            QMessageBox.warning(self, "No Data", "Please run a simulation first.")
+            return
+        
+        current_plot_type = self.plot_combo.currentText()
+        self.export_individual_plot(current_plot_type)
+
+    def export_all_plots(self):
+        """Export all plot types as high-resolution images"""
+        if not hasattr(self, 'last_solution') or self.last_solution is None:
+            QMessageBox.warning(self, "No Data", "Please run a simulation first.")
+            return
+        
+        from PyQt5.QtWidgets import QFileDialog
+        import os
+        from datetime import datetime
+        
+        # Create default filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_filename = f"glider_plots_{timestamp}"
+        
+        # Ask user for directory
+        directory = QFileDialog.getExistingDirectory(
+            self, 
+            "Select Directory to Save Plots",
+            os.path.expanduser("~/Desktop")
+        )
+        
+        if not directory:
+            return
+        
+        # List of all available plot types
+        plot_types = [
+            "Basic (Depth & Pitch)", 
+            "3D Trajectory", 
+            "Velocity Analysis", 
+            "Control & Forces", 
+            "Energy Analysis",
+            "Control Analysis",
+            "All Diagnostics"
+        ]
+        
+        # Export each plot type
+        exported_files = []
+        for plot_type in plot_types:
+            try:
+                # Create a new figure for export (full size)
+                export_fig = Figure(figsize=(16, 12), dpi=300)  # High resolution
+                
+                # Temporarily replace the main figure
+                original_fig = self.sim_fig
+                self.sim_fig = export_fig
+                
+                # Generate the plot
+                if plot_type == "Basic (Depth & Pitch)":
+                    self.plot_basic(self.last_solution)
+                elif plot_type == "3D Trajectory":
+                    self.plot_3d_trajectory(self.last_solution)
+                elif plot_type == "Velocity Analysis":
+                    self.plot_velocity_analysis(self.last_solution)
+                elif plot_type == "Control & Forces":
+                    self.plot_control_forces(self.last_solution)
+                elif plot_type == "Energy Analysis":
+                    self.plot_energy_analysis(self.last_solution)
+                elif plot_type == "Control Analysis":
+                    self.plot_control_analysis(self.last_solution)
+                elif plot_type == "All Diagnostics":
+                    self.plot_all_diagnostics(self.last_solution)
+                
+                # Save the plot
+                filename = f"{default_filename}_{plot_type.replace(' ', '_').replace('&', 'and')}.png"
+                filepath = os.path.join(directory, filename)
+                export_fig.savefig(filepath, dpi=300, bbox_inches='tight', 
+                                 facecolor='white', edgecolor='none')
+                
+                exported_files.append(filepath)
+                print(f"Exported: {filename}")
+                
+            except Exception as e:
+                print(f"Error exporting {plot_type}: {e}")
+                continue
+        
+        # Restore original figure
+        self.sim_fig = original_fig
+        
+        # Show success message
+        if exported_files:
+            QMessageBox.information(
+                self, 
+                "Export Complete", 
+                f"Successfully exported {len(exported_files)} plots to:\n{directory}\n\nFiles:\n" + 
+                "\n".join([os.path.basename(f) for f in exported_files])
+            )
+        else:
+            QMessageBox.warning(self, "Export Failed", "No plots were exported successfully.")
+
+    def export_individual_plot(self, plot_type, filename=None):
+        """Export a single plot type as high-resolution image"""
+        if not hasattr(self, 'last_solution') or self.last_solution is None:
+            QMessageBox.warning(self, "No Data", "Please run a simulation first.")
+            return
+        
+        from PyQt5.QtWidgets import QFileDialog
+        import os
+        from datetime import datetime
+        
+        # Create default filename
+        if filename is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"glider_{plot_type.replace(' ', '_').replace('&', 'and')}_{timestamp}.png"
+        
+        # Ask user for file location
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            f"Save {plot_type} Plot",
+            os.path.join(os.path.expanduser("~/Desktop"), filename),
+            "PNG Files (*.png);;PDF Files (*.pdf);;SVG Files (*.svg)"
+        )
+        
+        if not filepath:
+            return
+        
+        try:
+            # Create a new figure for export (full size)
+            export_fig = Figure(figsize=(16, 12), dpi=300)  # High resolution
+            
+            # Temporarily replace the main figure
+            original_fig = self.sim_fig
+            self.sim_fig = export_fig
+            
+            # Generate the plot
+            if plot_type == "Basic (Depth & Pitch)":
+                self.plot_basic(self.last_solution)
+            elif plot_type == "3D Trajectory":
+                self.plot_3d_trajectory(self.last_solution)
+            elif plot_type == "Velocity Analysis":
+                self.plot_velocity_analysis(self.last_solution)
+            elif plot_type == "Control & Forces":
+                self.plot_control_forces(self.last_solution)
+            elif plot_type == "Energy Analysis":
+                self.plot_energy_analysis(self.last_solution)
+            elif plot_type == "Control Analysis":
+                self.plot_control_analysis(self.last_solution)
+            elif plot_type == "All Diagnostics":
+                self.plot_all_diagnostics(self.last_solution)
+            
+            # Save the plot
+            export_fig.savefig(filepath, dpi=300, bbox_inches='tight', 
+                             facecolor='white', edgecolor='none')
+            
+            # Restore original figure
+            self.sim_fig = original_fig
+            
+            QMessageBox.information(self, "Export Complete", f"Plot saved to:\n{filepath}")
+            
+        except Exception as e:
+            # Restore original figure on error
+            self.sim_fig = original_fig
+            QMessageBox.critical(self, "Export Error", f"Failed to export plot:\n{str(e)}")
             
     def cancel_simulation(self):
         """Cancel the running simulation"""
@@ -1800,6 +1978,8 @@ class GliderGUI(QMainWindow):
         self.status_label.setText("Simulation completed! Updating plots...")
         self.btn_run.setEnabled(True)
         self.btn_export.setEnabled(True)
+        self.btn_export_plots.setEnabled(True)  # Enable export plots
+        self.btn_export_current.setEnabled(True)  # Enable current plot export
         self.update_plots(solution)
         self.update_physics_diagnostics(solution)
         self.update_control_summary(solution)
@@ -1812,6 +1992,8 @@ class GliderGUI(QMainWindow):
         self.status_label.setText(f"Simulation failed: {error_msg}")
         self.btn_run.setEnabled(True)
         self.btn_export.setEnabled(False)
+        self.btn_export_plots.setEnabled(False)  # Disable export plots
+        self.btn_export_current.setEnabled(False)  # Disable current plot export
         QMessageBox.critical(self, "Simulation Error", f"An error occurred during simulation:\n{error_msg}")
         
     def update_plot_type(self):
@@ -2059,9 +2241,42 @@ class GliderGUI(QMainWindow):
         self.sim_fig.clear()
         params = self.get_parameters()
         
+        # Calculate mass from basic parameters (simplified)
+        try:
+            # Get basic mass components
+            fixed_mass = params.get('fixed_mass', 3.0)
+            mvm_mass = params.get('MVM_mass', 5.0)
+            
+            # Estimate hull mass (simplified)
+            hull_radius = params.get('hull_radius', 0.08)
+            cyl_length = params.get('cyl_length', 0.9)
+            hull_thickness = params.get('hull_thickness', 0.005)
+            hull_density = params.get('hull_density', 2700.0)
+            
+            # Simplified hull mass calculation
+            hull_area = 2.0 * np.pi * hull_radius * cyl_length
+            m_hull = hull_area * hull_thickness * hull_density
+            
+            # Estimate ballast mass
+            ballast_radius = params.get('ballast_radius', 0.05)
+            ballast_length = params.get('ballast_length', 0.2)
+            rho_water = params.get('rho_water', 1025.0)
+            
+            # Average ballast fill from simulation
+            current_fill = np.mean(solution.y[13, :]) if solution.y.shape[0] > 13 else 0.5
+            ballast_volume = np.pi * ballast_radius**2 * ballast_length
+            m_ballast = rho_water * ballast_volume * current_fill
+            
+            # Total mass
+            mass = m_hull + m_ballast + fixed_mass + mvm_mass
+            
+        except Exception as e:
+            print(f"Error calculating mass: {e}")
+            # Fallback to a reasonable default
+            mass = 20.0  # kg
+        
         # Calculate energies
         g = 9.81  # gravity
-        mass = params.get('mass')
         
         # Potential energy (PE = mgh, where h is depth)
         depth = solution.y[2, :]
