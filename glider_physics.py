@@ -205,34 +205,30 @@ class UnderwaterGlider:
     def _setup_cfd_table(self):
         """Setup CFD table for drag coefficients vs angle of attack."""
         # Default CFD table
-        # Format: [AoA_deg, Cd_x, Cd_y, Cd_z, CL, CM]
+        # Format: [AoA_deg, Cd, CL, CM]
         # AoA in degrees, positive = nose up
         self.cfd_table = np.array([
-            [-90,  1.2,  0.8,  0.8,  0.0,  0.0],   # Nose down
-            [-60,  1.1,  0.9,  0.9, -0.5,  0.1],
-            [-45,  1.0,  1.0,  1.0, -0.8,  0.2],
-            [-30,  0.9,  1.1,  1.1, -1.0,  0.3],
-            [-15,  0.85, 1.15, 1.15, -1.1, 0.4],
-            [0,    0.8,  1.2,  1.2,  0.0,  0.0],   # Level flight
-            [15,   0.85, 1.15, 1.15, 1.1,  -0.4],
-            [30,   0.9,  1.1,  1.1,  1.0,  -0.3],
-            [45,   1.0,  1.0,  1.0,  0.8,  -0.2],
-            [60,   1.1,  0.9,  0.9,  0.5,  -0.1],
-            [90,   1.2,  0.8,  0.8,  0.0,  0.0],   # Nose up
+            [-90,  1.2,  0.0,  0.0],   # Nose down
+            [-60,  1.1, -0.5,  0.1],
+            [-45,  1.0, -0.8,  0.2],
+            [-30,  0.9, -1.0,  0.3],
+            [-15,  0.85, -1.1, 0.4],
+            [0,    0.8,  0.0,  0.0],   # Level flight
+            [15,   0.85, 1.1,  -0.4],
+            [30,   0.9,  1.0,  -0.3],
+            [45,   1.0,  0.8,  -0.2],
+            [60,   1.1,  0.5,  -0.1],
+            [90,   1.2,  0.0,  0.0],   # Nose up
         ])
         
         # Create interpolation functions for each coefficient
         aoa_deg = self.cfd_table[:, 0]
-        self._interp_cd_x = interp1d(aoa_deg, self.cfd_table[:, 1], kind='linear', 
-                                    bounds_error=False, fill_value=(self.cfd_table[0, 1], self.cfd_table[-1, 1]))
-        self._interp_cd_y = interp1d(aoa_deg, self.cfd_table[:, 2], kind='linear', 
-                                    bounds_error=False, fill_value=(self.cfd_table[0, 2], self.cfd_table[-1, 2]))
-        self._interp_cd_z = interp1d(aoa_deg, self.cfd_table[:, 3], kind='linear', 
-                                    bounds_error=False, fill_value=(self.cfd_table[0, 3], self.cfd_table[-1, 3]))
-        self._interp_cl = interp1d(aoa_deg, self.cfd_table[:, 4], kind='linear', 
-                                    bounds_error=False, fill_value=(self.cfd_table[0, 4], self.cfd_table[-1, 4]))
-        self._interp_cm = interp1d(aoa_deg, self.cfd_table[:, 5], kind='linear', 
-                                    bounds_error=False, fill_value=(self.cfd_table[0, 5], self.cfd_table[-1, 5]))
+        self._interp_cd = interp1d(aoa_deg, self.cfd_table[:, 1], kind='linear', 
+                                  bounds_error=False, fill_value=(self.cfd_table[0, 1], self.cfd_table[-1, 1]))
+        self._interp_cl = interp1d(aoa_deg, self.cfd_table[:, 2], kind='linear', 
+                                  bounds_error=False, fill_value=(self.cfd_table[0, 2], self.cfd_table[-1, 2]))
+        self._interp_cm = interp1d(aoa_deg, self.cfd_table[:, 3], kind='linear', 
+                                  bounds_error=False, fill_value=(self.cfd_table[0, 3], self.cfd_table[-1, 3]))
 
 
 
@@ -528,44 +524,46 @@ class UnderwaterGlider:
         F_buoy_body = R_ib @ F_buoy_inertial
 
         # CFD table-based hydrodynamic drag and lift forces
-        # Reference areas:
-        A_x = self._pi * self._hull_radius_sq            # frontal area for surge
-        A_yz = self.wing_area + self._hull_radius_sq * self.cyl_length           # need to add nose and tail area for sway and heave
+        # Reference area: use frontal area for drag calculations
+        A_ref = self._pi * self._hull_radius_sq  # Frontal area
         
         # Calculate angle of attack from body velocity
         aoa_deg = self.calculate_angle_of_attack(vel_body)
         
-        # Get drag coefficients from CFD table based on AoA
+        # Get coefficients from CFD table based on AoA
         coeffs = self.get_drag_coefficients(aoa_deg)
-        Cd_x = coeffs['Cd_x']
-        Cd_y = coeffs['Cd_y'] 
-        Cd_z = coeffs['Cd_z']
+        Cd = coeffs['Cd']
         CL = coeffs['CL']
         CM = coeffs['CM']
 
         u, v, w = vel_body
         V_mag = np.linalg.norm(vel_body)
         
-        # Quadratic drag forces: Fd = -0.5 * rho * Cd * A * |V| * V_component
-        Fd_x = -0.5 * rho * Cd_x * A_x * V_mag * u
-        Fd_y = -0.5 * rho * Cd_y * A_yz * V_mag * v  
-        Fd_z = -0.5 * rho * Cd_z * A_yz * V_mag * w
-        
-        # NOTE: At higher angles of attack, drag forces may not act purely along body axes
-        # For more accurate modeling, we may need to project drag forces along the direction of flow
-        # This would require calculating the actual flow direction relative to the body and
-        # resolving forces accordingly. Current implementation assumes drag acts along body axes.
-        
-        # Lift force (acts perpendicular to flow direction)
+        # Calculate drag force using single coefficient and proper flow direction projection
         if V_mag > 1e-6:
-            # Lift acts in the z-direction for this body frame
-            F_lift = 0.5 * rho * CL * A_yz * V_mag**2
-            # Apply lift in the appropriate direction based on AoA
-            F_lift_body = np.array([0.0, 0.0, F_lift])
+            # Drag force acts opposite to velocity direction
+            # F_drag = -0.5 * rho * Cd * A_ref * V_mag^2 * (velocity_unit_vector)
+            vel_unit = vel_body / V_mag
+            F_drag_magnitude = 0.5 * rho * Cd * A_ref * V_mag**2
+            F_drag_body = -F_drag_magnitude * vel_unit
+            
+            # Lift force (acts perpendicular to flow direction)
+            # For underwater gliders, lift primarily acts in the vertical plane
+            # Lift coefficient is based on AoA and acts perpendicular to the flow
+            F_lift_magnitude = 0.5 * rho * CL * A_ref * V_mag**2
+            
+            # Calculate lift direction: perpendicular to velocity in the vertical plane
+            # For a glider, lift acts in the z-direction relative to the body frame
+            # when there's a component of velocity in the x-direction
+            if abs(u) > 1e-6:  # Only apply lift if there's forward motion
+                # Lift acts in z-direction (up/down relative to body)
+                F_lift_body = np.array([0.0, 0.0, F_lift_magnitude])
+            else:
+                F_lift_body = np.array([0.0, 0.0, 0.0])
         else:
+            F_drag_body = np.array([0.0, 0.0, 0.0])
             F_lift_body = np.array([0.0, 0.0, 0.0])
         
-        F_drag_body = np.array([Fd_x, Fd_y, Fd_z])
         F_hydro_body = F_drag_body + F_lift_body
 
         # NOTE: rotational damping needs to be improved this is bad approximation
@@ -998,12 +996,10 @@ class UnderwaterGlider:
             aoa_deg: Angle of attack in degrees (positive = nose up)
             
         Returns:
-            Dictionary with Cd_x, Cd_y, Cd_z, CL, CM coefficients
+            Dictionary with Cd, CL, CM coefficients
         """
         return {
-            'Cd_x': float(self._interp_cd_x(aoa_deg)),
-            'Cd_y': float(self._interp_cd_y(aoa_deg)),
-            'Cd_z': float(self._interp_cd_z(aoa_deg)),
+            'Cd': float(self._interp_cd(aoa_deg)),
             'CL': float(self._interp_cl(aoa_deg)),
             'CM': float(self._interp_cm(aoa_deg))
         }

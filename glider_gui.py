@@ -758,7 +758,7 @@ class GliderGUI(QMainWindow):
         cfd_layout = QVBoxLayout()
         
         # Information about the CFD system
-        cfd_info_header = QLabel("All hydrodynamic coefficients (Cd_x, Cd_y, Cd_z, CL, CM) are now loaded from CFD tables.")
+        cfd_info_header = QLabel("All hydrodynamic coefficients (Cd, CL, CM) are now loaded from CFD tables.")
         cfd_info_header.setStyleSheet("color: blue; font-weight: bold; font-size: 11px;")
         cfd_layout.addWidget(cfd_info_header)
         
@@ -784,7 +784,7 @@ class GliderGUI(QMainWindow):
         # CFD table info
         cfd_info_layout = QHBoxLayout()
         cfd_info_layout.addWidget(QLabel("Format:"))
-        cfd_info_label = QLabel("CSV/JSON with columns: [AoA_deg, Cd_x, Cd_y, Cd_z, CL, CM]")
+        cfd_info_label = QLabel("CSV/JSON with columns: [AoA_deg, Cd, CL, CM]")
         cfd_info_label.setStyleSheet("color: gray; font-size: 10px;")
         cfd_info_layout.addWidget(cfd_info_label)
         cfd_layout.addLayout(cfd_info_layout)

@@ -8,10 +8,10 @@ import csv
 from scipy.interpolate import interp1d
 
 def _normalize_cfd_rows(rows):
-    """Normalize rows to ndarray with columns [AoA_deg, Cd_x, Cd_y, Cd_z, CL, CM] and sort by AoA."""
+    """Normalize rows to ndarray with columns [AoA_deg, Cd, CL, CM] and sort by AoA."""
     arr = np.asarray(rows, dtype=float)
-    if arr.ndim != 2 or arr.shape[1] != 6:
-        raise ValueError(f"CFD table must be Nx6, got shape {arr.shape}")
+    if arr.ndim != 2 or arr.shape[1] != 4:
+        raise ValueError(f"CFD table must be Nx4, got shape {arr.shape}")
     # sort by AoA column 0
     idx = np.argsort(arr[:, 0])
     return arr[idx]
@@ -19,10 +19,10 @@ def _normalize_cfd_rows(rows):
 def load_cfd_table_from_file(path: str) -> np.ndarray:
     """
     Load a CFD table from CSV or JSON.
-    Expected columns/order: [AoA_deg, Cd_x, Cd_y, Cd_z, CL, CM]
+    Expected columns/order: [AoA_deg, Cd, CL, CM]
     JSON can be:
-      - list of lists [[AoA, Cd_x, ...], ...]
-      - list of dicts [{"AoA_deg":..., "Cd_x":..., ...}, ...]
+      - list of lists [[AoA, Cd, ...], ...]
+      - list of dicts [{"AoA_deg":..., "Cd":..., ...}, ...]
     """
     ext = os.path.splitext(path)[1].lower()
     if ext in [".csv", ".txt"]:
@@ -40,9 +40,7 @@ def load_cfd_table_from_file(path: str) -> np.ndarray:
                 try:
                     col_map = {
                         'aoa_deg': header_lower.index('aoa_deg'),
-                        'cd_x': header_lower.index('cd_x'),
-                        'cd_y': header_lower.index('cd_y'),
-                        'cd_z': header_lower.index('cd_z'),
+                        'cd': header_lower.index('cd'),
                         'cl': header_lower.index('cl'),
                         'cm': header_lower.index('cm'),
                     }
@@ -50,8 +48,8 @@ def load_cfd_table_from_file(path: str) -> np.ndarray:
                         if not row or all(c.strip()=='' for c in row):
                             continue
                         rows.append([
-                            row[col_map['aoa_deg']], row[col_map['cd_x']], row[col_map['cd_y']],
-                            row[col_map['cd_z']], row[col_map['cl']], row[col_map['cm']]
+                            row[col_map['aoa_deg']], row[col_map['cd']],
+                            row[col_map['cl']], row[col_map['cm']]
                         ])
                 except ValueError:
                     # Fallback: treat as no header
@@ -61,12 +59,12 @@ def load_cfd_table_from_file(path: str) -> np.ndarray:
                     for row in reader:
                         if not row or all(c.strip()=='' for c in row):
                             continue
-                        rows.append(row[:6])
+                        rows.append(row[:4])
             else:
                 for row in reader:
                     if not row or all(c.strip()=='' for c in row):
                         continue
-                    rows.append(row[:6])
+                    rows.append(row[:4])
         return _normalize_cfd_rows(rows)
     elif ext == ".json":
         with open(path, "r", encoding="utf-8") as f:
@@ -77,9 +75,7 @@ def load_cfd_table_from_file(path: str) -> np.ndarray:
                 for d in data:
                     rows.append([
                         d.get('AoA_deg') if 'AoA_deg' in d else d.get('aoa_deg'),
-                        d.get('Cd_x') if 'Cd_x' in d else d.get('cd_x'),
-                        d.get('Cd_y') if 'Cd_y' in d else d.get('cd_y'),
-                        d.get('Cd_z') if 'Cd_z' in d else d.get('cd_z'),
+                        d.get('Cd') if 'Cd' in d else d.get('cd'),
                         d.get('CL') if 'CL' in d else d.get('cl'),
                         d.get('CM') if 'CM' in d else d.get('cm'),
                     ])
